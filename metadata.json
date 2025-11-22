@@ -1,0 +1,5 @@
+{
+  "name": "Rednote Creator Engine",
+  "description": "An AI-powered content generator designed to create viral Little Red Book (Xiaohongshu) posts from video scripts, notes, or search trends.",
+  "requestFramePermissions": []
+}
