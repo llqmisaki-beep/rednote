@@ -1,8 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { InputType, RednoteResponse, SearchResult, SearchSource, RednoteTone } from "../types";
 
-const apiKey = process.env.API_KEY;
-
 // --- System Instructions ---
 
 const SYSTEM_INSTRUCTION = `
@@ -67,9 +65,11 @@ const extractJSON = (text: string) => {
 
 // --- Main Functions ---
 
-export const searchTrends = async (query: string, sources: SearchSource[], customSource?: string): Promise<SearchResult[]> => {
-  if (!apiKey) throw new Error("API Key missing");
-  const ai = new GoogleGenAI({ apiKey });
+export const searchTrends = async (query: string, sources: SearchSource[], customSource?: string, apiKey?: string): Promise<SearchResult[]> => {
+  const finalKey = apiKey || process.env.API_KEY;
+  if (!finalKey) throw new Error("API Key 未设置。请点击右上角钥匙图标输入您的 Gemini API Key。");
+  
+  const ai = new GoogleGenAI({ apiKey: finalKey });
 
   // Helper to extract domain for site: operator
   const getDomain = (url: string) => {
@@ -148,10 +148,13 @@ export const generateRednote = async (
   inputText: string,
   contextData?: any,
   tone: RednoteTone = 'emotional',
-  customRequirement?: string
+  customRequirement?: string,
+  apiKey?: string
 ): Promise<RednoteResponse> => {
-  if (!apiKey) throw new Error("API Key missing");
-  const ai = new GoogleGenAI({ apiKey });
+  const finalKey = apiKey || process.env.API_KEY;
+  if (!finalKey) throw new Error("API Key 未设置。请点击右上角钥匙图标输入您的 Gemini API Key。");
+  
+  const ai = new GoogleGenAI({ apiKey: finalKey });
   
   let toneInstruction = "";
   if (tone === 'imitate' && customRequirement) {
@@ -205,9 +208,11 @@ export const generateRednote = async (
 
 // --- New Regeneration Functions ---
 
-export const regenerateTitles = async (currentTopic: string, referenceTitle: string): Promise<string[]> => {
-    if (!apiKey) throw new Error("API Key missing");
-    const ai = new GoogleGenAI({ apiKey });
+export const regenerateTitles = async (currentTopic: string, referenceTitle: string, apiKey?: string): Promise<string[]> => {
+    const finalKey = apiKey || process.env.API_KEY;
+    if (!finalKey) throw new Error("API Key missing");
+    
+    const ai = new GoogleGenAI({ apiKey: finalKey });
 
     const prompt = `
     Task: Generate 5 viral Xiaohongshu titles for the topic: "${currentTopic}".
@@ -229,9 +234,11 @@ export const regenerateTitles = async (currentTopic: string, referenceTitle: str
     }
 };
 
-export const rewriteContent = async (currentContent: string, referenceArticle: string): Promise<string> => {
-    if (!apiKey) throw new Error("API Key missing");
-    const ai = new GoogleGenAI({ apiKey });
+export const rewriteContent = async (currentContent: string, referenceArticle: string, apiKey?: string): Promise<string> => {
+    const finalKey = apiKey || process.env.API_KEY;
+    if (!finalKey) throw new Error("API Key missing");
+    
+    const ai = new GoogleGenAI({ apiKey: finalKey });
 
     const prompt = `
     Task: Rewrite the following content to match the writing style of the Reference Article.

@@ -1,17 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { generateRednote, searchTrends, regenerateTitles, rewriteContent } from './services/gemini';
 import { InputType, RednoteResponse, SearchResult, SearchSource, VideoFrame, VisualTemplate, RednoteTone } from './types';
 import { VisualCard } from './components/VisualCard';
-import { Sparkles, Copy, Loader2, Video, Type, Search, Check, Upload, Image as ImageIcon, Globe, Youtube, Twitter, ArrowLeft, PenTool, FileText, RefreshCw, Wand2, Link as LinkIcon } from 'lucide-react';
+import { Sparkles, Copy, Loader2, Video, Type, Search, Check, Upload, Image as ImageIcon, Globe, Youtube, Twitter, ArrowLeft, PenTool, FileText, RefreshCw, Wand2, Link as LinkIcon, Key, X } from 'lucide-react';
 
 const App: React.FC = () => {
   const [step, setStep] = useState<'input' | 'result'>('input');
+
+  // API Key State
+  const [userApiKey, setUserApiKey] = useState('');
+  const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
+  const [tempKey, setTempKey] = useState('');
 
   // Input State
   const [inputType, setInputType] = useState<InputType>('Type A');
   const [inputText, setInputText] = useState('');
   const [selectedTone, setSelectedTone] = useState<RednoteTone>('emotional');
-  const [imitateText, setImitateText] = useState(''); // For Type 1 "Imitate" style
+  const [imitateText, setImitateText] = useState(''); 
   
   // Media State
   const [videoFile, setVideoFile] = useState<File | null>(null);
@@ -25,7 +30,7 @@ const App: React.FC = () => {
 
   // Search State
   const [searchSources, setSearchSources] = useState<SearchSource[]>([]);
-  const [customSearchSource, setCustomSearchSource] = useState(''); // New custom source input
+  const [customSearchSource, setCustomSearchSource] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [selectedResultIds, setSelectedResultIds] = useState<Set<string>>(new Set());
   const [isSearching, setIsSearching] = useState(false);
@@ -50,6 +55,25 @@ const App: React.FC = () => {
   const [isRewritingContent, setIsRewritingContent] = useState(false);
 
   const [copied, setCopied] = useState(false);
+
+  // --- Init ---
+  useEffect(() => {
+      const storedKey = localStorage.getItem('rednote_gemini_key');
+      if (storedKey) {
+          setUserApiKey(storedKey);
+      } else {
+          // Prompt user on first visit if no env key is present (optional, good UX)
+          // setTimeout(() => setIsKeyModalOpen(true), 1000);
+      }
+  }, []);
+
+  const saveApiKey = () => {
+      if (tempKey.trim()) {
+          setUserApiKey(tempKey.trim());
+          localStorage.setItem('rednote_gemini_key', tempKey.trim());
+          setIsKeyModalOpen(false);
+      }
+  };
 
   // --- Handlers ---
   const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -108,12 +132,14 @@ const App: React.FC = () => {
   };
   const handleSearch = async () => {
       if (!inputText.trim()) return;
+      if (!userApiKey) { setIsKeyModalOpen(true); return; } // Enforce Key
       setIsSearching(true); setSearchResults([]); setSelectedResultIds(new Set());
       try {
-          const results = await searchTrends(inputText, searchSources, customSearchSource);
+          const results = await searchTrends(inputText, searchSources, customSearchSource, userApiKey);
           setSearchResults(results || []);
-      } catch (e) {
-          console.error(e); alert('搜索失败，请重试');
+      } catch (e: any) {
+          console.error(e); 
+          alert(`搜索失败: ${e.message || '请检查网络或API配置'}`);
       } finally { setIsSearching(false); }
   };
   const toggleResultSelection = (id: string) => {
@@ -123,6 +149,8 @@ const App: React.FC = () => {
   };
 
   const handleGenerate = async () => {
+    if (!userApiKey) { setIsKeyModalOpen(true); return; } // Enforce Key
+
     const hasInput = !!inputText.trim();
     const hasContextTypeC = inputType === 'Type C' && selectedResultIds.size > 0;
     const hasVideoTypeA = inputType === 'Type A' && !!videoFile;
@@ -147,7 +175,7 @@ const App: React.FC = () => {
 
       const finalInputText = (inputType === 'Type C' && !hasInput) ? "Generate content based on results" : inputText;
       
-      const data = await generateRednote(inputType, finalInputText, contextData, selectedTone, imitateText);
+      const data = await generateRednote(inputType, finalInputText, contextData, selectedTone, imitateText, userApiKey);
       
       setResult(data);
       setEditableTitle(data.content.title);
@@ -160,31 +188,43 @@ const App: React.FC = () => {
       setViralArticleInput('');
       
       setStep('result'); window.scrollTo(0, 0);
-    } catch (error) {
-      console.error(error); alert('生成失败，请重试。');
+    } catch (error: any) {
+      console.error(error); 
+      alert(`生成失败: ${error.message || '未知错误，请检查网络或API Key配置'}`);
     } finally { setIsLoading(false); }
   };
 
   // New Regeneration Handlers
   const handleRegenerateTitles = async () => {
       if (!viralTitleInput.trim() || !result) return;
+      if (!userApiKey) { setIsKeyModalOpen(true); return; }
       setIsRegeneratingTitles(true);
-      const newTitles = await regenerateTitles(inputText || result.content.coreIdea, viralTitleInput);
-      if (result) {
-          setResult({ ...result, content: { ...result.content, titles_options: newTitles } });
+      try {
+        const newTitles = await regenerateTitles(inputText || result.content.coreIdea, viralTitleInput, userApiKey);
+        if (result) {
+            setResult({ ...result, content: { ...result.content, titles_options: newTitles } });
+        }
+      } catch (e: any) {
+          alert(`标题生成失败: ${e.message}`);
+      } finally {
+        setIsRegeneratingTitles(false);
       }
-      setIsRegeneratingTitles(false);
   };
 
   const handleRewriteContent = async () => {
       if (!viralArticleInput.trim() || !result) return;
+      if (!userApiKey) { setIsKeyModalOpen(true); return; }
       setIsRewritingContent(true);
-      const newBody = await rewriteContent(editableBody, viralArticleInput);
-      setEditableBody(newBody);
-      setIsRewritingContent(false);
+      try {
+        const newBody = await rewriteContent(editableBody, viralArticleInput, userApiKey);
+        setEditableBody(newBody);
+      } catch (e: any) {
+          alert(`改写失败: ${e.message}`);
+      } finally {
+        setIsRewritingContent(false);
+      }
   };
 
-  // Visual Data construction
   const getVisualBackground = () => {
       if (customCoverImage) return customCoverImage;
       if (inputType === 'Type A') return frames.find(f => f.id === selectedFrameId)?.url || null;
@@ -197,8 +237,38 @@ const App: React.FC = () => {
   } : null;
 
   return (
-    <div className="min-h-screen bg-[#F8F9FA] text-gray-900 font-sans">
+    <div className="min-h-screen bg-[#F8F9FA] text-gray-900 font-sans relative">
       
+      {/* API Key Modal */}
+      {isKeyModalOpen && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm p-4">
+              <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl animate-fade-in">
+                  <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2"><Key size={20}/>设置 Gemini API Key</h3>
+                      <button onClick={() => setIsKeyModalOpen(false)} className="p-1 hover:bg-gray-100 rounded-full"><X size={20}/></button>
+                  </div>
+                  <p className="text-sm text-gray-500 mb-4">请在下方输入您的 Google Gemini API Key。该 Key 仅存储在您的本地浏览器中。</p>
+                  <input 
+                    type="password"
+                    className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-[#ff2442] outline-none mb-4 font-mono"
+                    placeholder="AIzaSy..."
+                    value={tempKey}
+                    onChange={(e) => setTempKey(e.target.value)}
+                  />
+                  <button 
+                    onClick={saveApiKey}
+                    disabled={!tempKey}
+                    className="w-full py-3 bg-black text-white rounded-xl font-bold hover:bg-gray-800 disabled:opacity-50 transition-colors"
+                  >
+                      保存并开始使用
+                  </button>
+                  <div className="mt-4 text-xs text-gray-400 text-center">
+                      没有 Key？ <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="underline text-blue-500">去 Google AI Studio 免费获取</a>
+                  </div>
+              </div>
+          </div>
+      )}
+
       {/* HEADER */}
       <div className="bg-white border-b border-gray-200 px-6 py-4 sticky top-0 z-20 shadow-sm">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
@@ -206,11 +276,20 @@ const App: React.FC = () => {
                 <div className="w-8 h-8 bg-[#ff2442] rounded-lg flex items-center justify-center text-white font-bold shadow-md shadow-red-200">R</div>
                 <h1 className="text-xl font-bold tracking-tight hidden sm:block">Rednote Creator</h1>
             </div>
-            {step === 'result' && (
-                <button onClick={() => setStep('input')} className="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-[#ff2442] bg-gray-100 px-4 py-2 rounded-full">
-                    <ArrowLeft size={16} /> 返回修改
+            <div className="flex items-center gap-2">
+                {step === 'result' && (
+                    <button onClick={() => setStep('input')} className="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-[#ff2442] bg-gray-100 px-4 py-2 rounded-full">
+                        <ArrowLeft size={16} /> 返回修改
+                    </button>
+                )}
+                <button 
+                    onClick={() => { setTempKey(userApiKey); setIsKeyModalOpen(true); }}
+                    className={`p-2 rounded-full border transition-colors ${userApiKey ? 'text-green-600 border-green-200 bg-green-50' : 'text-red-500 border-red-200 bg-red-50 animate-pulse'}`}
+                    title="设置 API Key"
+                >
+                    <Key size={20} />
                 </button>
-            )}
+            </div>
         </div>
       </div>
 
@@ -338,7 +417,6 @@ const App: React.FC = () => {
                              <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">选择文案风格</label>
                         </div>
                         <div className="flex flex-wrap gap-2 mb-3">
-                            {/* Updated tones per request: Emotional, Professional, Speed */}
                             <button onClick={() => setSelectedTone('emotional')} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${selectedTone === 'emotional' ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600'}`}>😭 情感共鸣</button>
                             <button onClick={() => setSelectedTone('professional')} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${selectedTone === 'professional' ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600'}`}>🎓 干货科普</button>
                             <button onClick={() => setSelectedTone('speed')} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${selectedTone === 'speed' ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600'}`}>⚡ 速递新闻</button>
