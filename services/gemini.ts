@@ -33,6 +33,7 @@ System Instruction: Rednote Creator Engine (Chinese Version)
     }
   }
 }
+Return ONLY valid JSON. No markdown formatting.
 `;
 
 // Optimized for extreme speed: Fewer results, shorter instruction
@@ -188,7 +189,10 @@ export const generateRednote = async (
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: { parts: promptParts },
-      config: { systemInstruction: SYSTEM_INSTRUCTION, responseMimeType: "application/json" },
+      config: { 
+          systemInstruction: SYSTEM_INSTRUCTION, 
+          // REMOVED responseMimeType to prevent 400 INVALID_ARGUMENT. We rely on extractJSON.
+      },
     });
 
     const safeJson = extractJSON(response.text || "{}") as any;
@@ -224,7 +228,7 @@ export const regenerateTitles = async (currentTopic: string, referenceTitle: str
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: prompt,
-            config: { responseMimeType: "application/json" }
+            // REMOVED responseMimeType to prevent 400 INVALID_ARGUMENT
         });
         const json = extractJSON(response.text || "[]");
         return Array.isArray(json) ? json : (json.titles || []);
