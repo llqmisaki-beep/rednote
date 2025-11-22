@@ -53,14 +53,14 @@ Return JSON. Snippets < 50 chars. EXACT URLs.
 const extractJSON = (text: string) => {
   try {
     return JSON.parse(text);
-  } catch (e) {
+  } catch {
     const jsonBlock = text.match(/```json\s*([\s\S]*?)\s*```/);
-    if (jsonBlock) { try { return JSON.parse(jsonBlock[1]); } catch (e2) { } }
+    if (jsonBlock) { try { return JSON.parse(jsonBlock[1]); } catch { } }
     const codeBlock = text.match(/```\s*([\s\S]*?)\s*```/);
-    if (codeBlock) { try { return JSON.parse(codeBlock[1]); } catch (e3) { } }
+    if (codeBlock) { try { return JSON.parse(codeBlock[1]); } catch { } }
     const start = text.indexOf('{');
     const end = text.lastIndexOf('}');
-    if (start !== -1 && end !== -1 && end > start) { try { return JSON.parse(text.substring(start, end + 1)); } catch (e4) { } }
+    if (start !== -1 && end !== -1 && end > start) { try { return JSON.parse(text.substring(start, end + 1)); } catch { } }
     throw new Error("Could not extract JSON from response");
   }
 };
@@ -76,12 +76,12 @@ export const searchTrends = async (query: string, sources: SearchSource[], custo
       try {
           const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`);
           return urlObj.hostname;
-      } catch (e) {
+      } catch {
           return url; // Fallback to raw string if not a valid URL format
       }
   };
 
-  const platformKeywords = sources.map(s => {
+  const platformKeywords: string[] = sources.map(s => {
     if (s === 'x') return 'site:twitter.com OR site:x.com';
     if (s === 'youtube') return 'site:youtube.com';
     if (s === 'google') return ''; 
