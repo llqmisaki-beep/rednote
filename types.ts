@@ -1,6 +1,7 @@
 export type InputType = 'Type A' | 'Type B' | 'Type C';
 
-export type SearchSource = 'x' | 'youtube' | 'google';
+// Removed 'youtube'
+export type SearchSource = 'x' | 'google';
 
 export type RednoteTone = 'emotional' | 'professional' | 'speed' | 'imitate' | 'humorous';
 
@@ -45,7 +46,15 @@ export interface VisualElement {
   } | null;
 }
 
-export type VisualTemplate = 'memo' | 'literature' | 'card' | 'neon' | 'polaroid' | 'magazine' | 'subtitle';
+export type VisualTemplate = 
+  | 'apple_note' 
+  | 'memo' 
+  | 'literature' 
+  | 'magazine' 
+  | 'notification'
+  | 'receipt'
+  | 'polaroid'
+  | 'chat';
 
 export interface VisualData {
   mode: 'subtitle' | 'infographic';

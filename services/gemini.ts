@@ -1,6 +1,8 @@
 import { GoogleGenAI } from "@google/genai";
 import { InputType, RednoteResponse, SearchResult, SearchSource, RednoteTone } from "../types";
 
+const apiKey = process.env.API_KEY;
+
 // --- System Instructions ---
 
 const SYSTEM_INSTRUCTION = `
@@ -8,13 +10,7 @@ System Instruction: Rednote Creator Engine (Chinese Version)
 1. Role: You are the "Rednote Creator". Transform inputs into viral Xiaohongshu posts.
 **CRITICAL: OUTPUT MUST BE IN SIMPLIFIED CHINESE.**
 
-2. Styles:
-   - Emotional: Empathetic, use "家人们", "泪目".
-   - Professional (Dry Goods): Academic, structured, "干货".
-   - Speed (News): Flash news, concise, "速递", "刚刚".
-   - Imitate: Strictly mimic the tone, sentence structure, and emoji usage of the provided reference text.
-
-3. JSON Structure (Strict):
+2. JSON Structure (Strict):
 {
   "status": "success",
   "content": {
@@ -36,10 +32,12 @@ System Instruction: Rednote Creator Engine (Chinese Version)
 Return ONLY valid JSON. No markdown formatting.
 `;
 
-// Optimized for extreme speed: Fewer results, shorter instruction
 const SEARCH_SYSTEM_INSTRUCTION = `
-FAST NEWS AGGREGATOR.
-Return JSON. Snippets < 50 chars. EXACT URLs.
+You are a ULTRA-FAST news aggregator.
+**CRITICAL RULES:**
+1. If the query is a URL, you MUST prioritize extracting information from that specific link.
+2. **EXTRACT IMAGE:** Try to find the main article image URL (OG:Image) and return it in 'imageUrl'.
+3. Return JSON only.
 {
   "results": [
     { "id": "1", "title": "Title", "url": "...", "source": "...", "date": "...", "snippet": "...", "imageUrl": "..." }
@@ -72,37 +70,33 @@ export const searchTrends = async (query: string, sources: SearchSource[], custo
   
   const ai = new GoogleGenAI({ apiKey: finalKey });
 
-  // Helper to extract domain for site: operator
-  const getDomain = (url: string) => {
-      try {
-          const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`);
-          return urlObj.hostname;
-      } catch {
-          return url; // Fallback to raw string if not a valid URL format
+  let fullQuery = "";
+  
+  if (customSource && (customSource.startsWith('http') || customSource.includes('www'))) {
+      fullQuery = `Analyze this specific URL: ${customSource}. Extract title, summary, and the Main Image URL.`;
+  } else {
+      const platformKeywords: string[] = sources.map(s => {
+        if (s === 'x') return 'site:twitter.com OR site:x.com';
+        if (s === 'google') return ''; 
+        return '';
+      });
+      
+      if (customSource && customSource.trim()) {
+          platformKeywords.push(`site:${customSource.trim()}`);
       }
-  };
 
-  const platformKeywords: string[] = sources.map(s => {
-    if (s === 'x') return 'site:twitter.com OR site:x.com';
-    if (s === 'youtube') return 'site:youtube.com';
-    if (s === 'google') return ''; 
-    return '';
-  });
-
-  // Add custom source if present
-  if (customSource && customSource.trim()) {
-      const domain = getDomain(customSource.trim());
-      platformKeywords.push(`site:${domain}`);
+      const sourceFilter = platformKeywords.filter(Boolean).join(' OR ');
+      const qText = query || "Latest trending news";
+      fullQuery = `"${qText}" ${sourceFilter ? `(${sourceFilter})` : ''}`;
   }
 
-  const sourceFilter = platformKeywords.filter(Boolean).join(' OR ');
-  const fullQuery = `"${query}" ${sourceFilter ? `(${sourceFilter})` : ''}`;
-
   try {
-    // Optimized: Requesting top 8 results for speed (was 15)
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
-      contents: `Search: ${fullQuery}. Return top 8 results JSON. Sort by Date.`,
+      contents: `Task: ${fullQuery}. 
+      If it is a URL, extract the main content summary and imageUrl.
+      If it is a keyword, list top 8 results.
+      Return strictly JSON.`,
       config: {
         tools: [{ googleSearch: {} }],
         systemInstruction: SEARCH_SYSTEM_INSTRUCTION,
@@ -115,15 +109,14 @@ export const searchTrends = async (query: string, sources: SearchSource[], custo
     if (Array.isArray(parsedData)) results = parsedData;
     else if (parsedData.results && Array.isArray(parsedData.results)) results = parsedData.results;
 
-    // Fallback to Grounding Metadata (often faster/more reliable for URLs)
     const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
     
     if (results.length === 0 && groundingChunks.length > 0) {
         return groundingChunks.map((chunk: any, idx: number) => ({
           id: String(idx),
-          title: chunk.web?.title || "搜索结果",
-          snippet: "点击标题查看详情...",
-          source: "Web",
+          title: chunk.web?.title || "搜索结果 / 链接分析",
+          snippet: "已获取链接内容，点击生成笔记进行深度分析...",
+          source: "Web Link",
           url: chunk.web?.uri,
           date: ""
         }));
@@ -153,36 +146,46 @@ export const generateRednote = async (
   apiKey?: string
 ): Promise<RednoteResponse> => {
   const finalKey = apiKey || process.env.API_KEY;
-  if (!finalKey) throw new Error("API Key 未设置。请点击右上角钥匙图标输入您的 Gemini API Key。");
+  if (!finalKey) throw new Error("API Key 未设置。");
   
   const ai = new GoogleGenAI({ apiKey: finalKey });
   
   let toneInstruction = "";
-  if (tone === 'imitate' && customRequirement) {
-      toneInstruction = `STYLE MIMICRY MODE.
-      REFERENCE TEXT TO MIMIC: """${customRequirement}"""
-      INSTRUCTION: Analyze the writing style, emoji usage, sentence length, and tone of the REFERENCE TEXT. 
-      Generate the new content for the User Topic strictly adhering to this style.`;
+  
+  if (tone === 'imitate') {
+      const referenceText = customRequirement || "No reference provided, use generic viral style.";
+      toneInstruction = `
+      # Role: 小红书爆款拆解与重构专家
+      ## Reference Viral Text:
+      """${referenceText}"""
+      ## My Topic:
+      "${inputText}"
+      ## Output:
+      1. 5 Viral Titles.
+      2. Content mimicking the reference style exactly.
+      `;
   } else {
       switch (tone) {
-          case 'emotional': toneInstruction = "Tone: Emotional Resonance (情感共鸣). Focus on feelings, empathy, '家人们'."; break;
-          case 'professional': toneInstruction = "Tone: Dry Goods Science (干货科普). Structured, objective, educational."; break;
-          case 'speed': toneInstruction = "Tone: News Speed (速递). Urgent, 'Just in', 'Breaking', concise."; break;
+          case 'emotional': toneInstruction = "Tone: Emotional Resonance."; break;
+          case 'professional': toneInstruction = "Tone: Professional Science."; break;
+          case 'speed': toneInstruction = "Tone: News Speed."; break;
           case 'humorous': toneInstruction = "Tone: Humorous/Sarcastic."; break;
       }
   }
 
   let promptParts: any[] = [
-      { text: `inputType: ${inputType}\nUser Topic/Notes: ${inputText}\n\n${toneInstruction}` }
+      { text: `inputType: ${inputType}\n\n${toneInstruction}` }
   ];
   
   if (inputType === 'Type C' && contextData) {
-      promptParts.push({ text: `\n\nSelected Search Context: ${JSON.stringify(contextData, null, 2)}` });
+      promptParts.push({ text: `\n\nSelected Search/Link Context: ${JSON.stringify(contextData, null, 2)}` });
   } else if (inputType === 'Type A' && contextData) {
        promptParts.push({ text: `\n\nVisual Context: ${contextData.frameCount} frames extracted from video.` });
   } else if (inputType === 'Type B' && contextData && contextData.fileData) {
-      promptParts.push({ text: `\n\nAnalyze PDF. Extract title, abstract, methodology, conclusion.` });
+      promptParts.push({ text: `\n\nAnalyze PDF content.` });
       promptParts.push({ inlineData: { mimeType: contextData.mimeType || 'application/pdf', data: contextData.fileData } });
+  } else {
+      if (tone !== 'imitate') promptParts.push({ text: `Topic: ${inputText}` });
   }
 
   try {
@@ -191,13 +194,11 @@ export const generateRednote = async (
       contents: { parts: promptParts },
       config: { 
           systemInstruction: SYSTEM_INSTRUCTION, 
-          // REMOVED responseMimeType to prevent 400 INVALID_ARGUMENT. We rely on extractJSON.
       },
     });
 
     const safeJson = extractJSON(response.text || "{}") as any;
     
-    // Basic Sanitization
     if (!safeJson.content) safeJson.content = { title: "AI Note", fullText: response.text || "" };
     if (!safeJson.content.fullText) safeJson.content.fullText = safeJson.content.body || "";
     if (!Array.isArray(safeJson.content.titles_options)) safeJson.content.titles_options = [safeJson.content.title || "Title"];
@@ -210,17 +211,14 @@ export const generateRednote = async (
   }
 };
 
-// --- New Regeneration Functions ---
-
 export const regenerateTitles = async (currentTopic: string, referenceTitle: string, apiKey?: string): Promise<string[]> => {
     const finalKey = apiKey || process.env.API_KEY;
-    if (!finalKey) throw new Error("API Key missing");
-    
     const ai = new GoogleGenAI({ apiKey: finalKey });
 
     const prompt = `
-    Task: Generate 5 viral Xiaohongshu titles for the topic: "${currentTopic}".
-    Constraint: You MUST mimic the style/structure/shock-factor of this REFERENCE TITLE: "${referenceTitle}".
+    Task: Generate 5 NEW viral Xiaohongshu titles for: "${currentTopic}".
+    Constraint: Mimic style of: "${referenceTitle || 'High Click-Through Rate styles'}".
+    Format: Emoji + Keyword + Pain Point.
     Output: JSON array of strings.
     `;
 
@@ -228,35 +226,24 @@ export const regenerateTitles = async (currentTopic: string, referenceTitle: str
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: prompt,
-            // REMOVED responseMimeType to prevent 400 INVALID_ARGUMENT
         });
         const json = extractJSON(response.text || "[]");
         return Array.isArray(json) ? json : (json.titles || []);
     } catch (e) {
-        console.error(e);
         return ["生成失败", "请重试"];
     }
 };
 
 export const rewriteContent = async (currentContent: string, referenceArticle: string, apiKey?: string): Promise<string> => {
     const finalKey = apiKey || process.env.API_KEY;
-    if (!finalKey) throw new Error("API Key missing");
-    
     const ai = new GoogleGenAI({ apiKey: finalKey });
 
     const prompt = `
-    Task: Rewrite the following content to match the writing style of the Reference Article.
-    
-    ORIGINAL CONTENT:
-    ${currentContent}
-
-    REFERENCE ARTICLE (Mimic this style):
-    ${referenceArticle}
-
-    INSTRUCTION:
-    - Keep the core information of the Original Content.
-    - Apply the tone, sentence structure, formatting, and emoji usage of the Reference Article.
-    - Output only the rewriten text.
+    Role: Rednote Editor.
+    Task: Rewrite/Improve the content below.
+    ${referenceArticle ? `STYLE REFERENCE: """${referenceArticle}"""` : 'Instruction: Make it more viral.'}
+    CONTENT: """${currentContent}"""
+    Output the new content directly.
     `;
 
     try {
@@ -266,7 +253,35 @@ export const rewriteContent = async (currentContent: string, referenceArticle: s
         });
         return response.text || currentContent;
     } catch (e) {
-        console.error(e);
         return currentContent;
+    }
+};
+
+// New Function for Cover Title
+export const regenerateCoverTitle = async (topic: string, currentTitle: string, apiKey?: string): Promise<string> => {
+    const finalKey = apiKey || process.env.API_KEY;
+    const ai = new GoogleGenAI({ apiKey: finalKey });
+
+    const prompt = `
+    Task: Generate ONE extremely visually impactful "Cover Title" (Big Text) for a Rednote cover image.
+    Topic: "${topic}"
+    Current: "${currentTitle}"
+    
+    Requirements:
+    1. Very short (2-6 words max).
+    2. High impact, clickbait, emotional or shocking.
+    3. Suitable for large poster text.
+    
+    Output: Just the text string.
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+        });
+        return response.text?.trim().replace(/^"|"$/g, '') || currentTitle;
+    } catch (e) {
+        return currentTitle;
     }
 };
