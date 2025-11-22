@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { generateRednote, searchTrends, regenerateTitles, rewriteContent } from './services/gemini';
 import { InputType, RednoteResponse, SearchResult, SearchSource, VideoFrame, VisualTemplate, RednoteTone } from './types';
 import { VisualCard } from './components/VisualCard';
-import { Sparkles, Copy, Loader2, Video, Type, Search, Check, Upload, Image as ImageIcon, Globe, Youtube, Twitter, ExternalLink, Clock, Tv, ArrowLeft, PenTool, FileText, RefreshCw, Wand2, Link as LinkIcon } from 'lucide-react';
+import { Sparkles, Copy, Loader2, Video, Type, Search, Check, Upload, Image as ImageIcon, Globe, Youtube, Twitter, ExternalLink, Clock, ArrowLeft, PenTool, FileText, RefreshCw, Wand2, Link as LinkIcon } from 'lucide-react';
 
 const App: React.FC = () => {
   const [step, setStep] = useState<'input' | 'result'>('input');

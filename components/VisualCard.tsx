@@ -10,7 +10,7 @@ interface VisualCardProps {
 export const VisualCard: React.FC<VisualCardProps> = ({ data, backgroundImage, coverTextOverride }) => {
   const { templateRecommendation, colorPalette, elements } = data;
   const safePalette = colorPalette && colorPalette.length >= 3 ? colorPalette : ['#ffffff', '#000000', '#ff2442'];
-  const [bg, text, accent] = safePalette;
+  const [bg, , accent] = safePalette; // Removed unused 'text' variable
 
   // Strict 3:4 aspect ratio container styles
   const containerClass = "aspect-[3/4] w-full max-w-sm mx-auto relative shadow-xl overflow-hidden flex flex-col select-none";
