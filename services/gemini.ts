@@ -3,9 +3,11 @@ import { InputType, RednoteResponse, SearchResult, SearchSource, RednoteTone, Me
 
 const apiKey = process.env.API_KEY;
 
-// Use Pro model for heavy analysis, Flash for quick tasks
-const PRO_MODEL = 'gemini-1.5-pro'; 
-const FAST_MODEL = 'gemini-1.5-flash';
+// --- Model Configuration ---
+// As requested: Use 'gemini-3-pro-preview' for deep analysis and generation.
+const PRO_MODEL = 'gemini-3-pro-preview'; 
+// Use 'gemini-2.5-flash' for high-speed simple tasks (like search aggregation or simple title tweaks)
+const FAST_MODEL = 'gemini-2.5-flash';
 
 // --- System Instructions ---
 
@@ -44,7 +46,15 @@ You are a ULTRA-FAST news aggregator & content parser.
 3. Return JSON only.
 {
   "results": [
-    { "id": "1", "title": "Title", "url": "...", "source": "...", "date": "...", "snippet": "...", "imageUrl": "..." }
+    { 
+      "id": "1", 
+      "title": "Title", 
+      "url": "...", 
+      "source": "...", 
+      "date": "...", 
+      "snippet": "...", 
+      "imageUrl": "https://..." 
+    }
   ]
 }
 `;
@@ -87,21 +97,16 @@ export const analyzeMedia = async (
 
     // Construct parts based on input
     const parts: any[] = [{ text: prompt }];
-    if (inputType === 'Type A' && fileData.frames) {
-        // Simulating video analysis via frames for now (or actual video file if supported/uploaded)
-        // For this demo, we assume fileData contains info about video or we assume user wants textual analysis of context
-        // If we had the video file bytes, we'd pass them here. 
-        // Since browser upload of video bytes to Gemini API needs File API, we simulate with a description prompt if video bytes aren't passed directly or frames.
-        // *Assuming fileData is the description for now to save bandwidth in this demo environment, 
-        // OR if we have base64 PDF.*
-        parts.push({ text: "Video Context/Transcript: " + (fileData.description || "Analyze the visual content") });
+    if (inputType === 'Type A' && fileData.description) {
+        // Using description as context for video analysis in this demo
+        parts.push({ text: "Video Context/Transcript: " + fileData.description });
     } else if (inputType === 'Type B' && fileData.base64) {
         parts.push({ inlineData: { mimeType: fileData.mimeType || 'application/pdf', data: fileData.base64 } });
     }
 
     try {
         const response = await ai.models.generateContent({
-            model: PRO_MODEL, // Use Pro for deep analysis
+            model: PRO_MODEL, // Gemini 3 Pro for deep analysis
             contents: { parts },
             config: { responseMimeType: "application/json" }
         });
@@ -129,7 +134,7 @@ export const askAI = async (
 
     try {
         const response = await ai.models.generateContent({
-            model: PRO_MODEL,
+            model: PRO_MODEL, // Gemini 3 Pro for reasoning
             contents: prompt,
         });
         return response.text || "Unable to answer.";
@@ -170,7 +175,7 @@ export const searchTrends = async (query: string, sources: SearchSource[], custo
 
   try {
     const response = await ai.models.generateContent({
-      model: FAST_MODEL, // Search is fine with Flash
+      model: FAST_MODEL, // Keep Flash for search speed
       contents: `Task: ${fullQuery}. 
       Return strictly JSON list with 'imageUrl' if found.`,
       config: {
@@ -271,7 +276,7 @@ export const generateRednote = async (
 
   try {
     const response = await ai.models.generateContent({
-      model: PRO_MODEL, // Use Pro for generation for better quality
+      model: PRO_MODEL, // Gemini 3 Pro for best quality generation
       contents: { parts: promptParts },
       config: { 
           systemInstruction: SYSTEM_INSTRUCTION, 
@@ -305,7 +310,7 @@ export const regenerateTitles = async (currentTopic: string, referenceTitle: str
 
     try {
         const response = await ai.models.generateContent({
-            model: FAST_MODEL,
+            model: FAST_MODEL, // Fast model for simple titles
             contents: prompt,
         });
         const json = extractJSON(response.text || "[]");
@@ -329,7 +334,7 @@ export const rewriteContent = async (currentContent: string, referenceArticle: s
 
     try {
         const response = await ai.models.generateContent({
-            model: PRO_MODEL, // Pro for writing
+            model: PRO_MODEL, // Gemini 3 Pro for high quality writing
             contents: prompt,
         });
         return response.text || currentContent;
@@ -353,7 +358,7 @@ export const regenerateCoverTitle = async (topic: string, currentTitle: string, 
 
     try {
         const response = await ai.models.generateContent({
-            model: FAST_MODEL,
+            model: FAST_MODEL, // Fast model is sufficient for short text
             contents: prompt,
         });
         return response.text?.trim().replace(/^"|"$/g, '') || currentTitle;
