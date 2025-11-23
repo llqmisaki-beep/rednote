@@ -7,6 +7,7 @@ interface VisualCardProps {
   backgroundImage?: string | null;
   coverTextOverride?: string; 
   coverSubOverride?: string;
+  pointsOverride?: string[]; // New: Allow editing the list points
   coverFontSize?: number;
 }
 
@@ -15,6 +16,7 @@ export const VisualCard: React.FC<VisualCardProps> = React.memo(({
     backgroundImage, 
     coverTextOverride, 
     coverSubOverride,
+    pointsOverride,
     coverFontSize = 1 
 }) => {
   const { templateRecommendation, colorPalette, elements } = data;
@@ -23,9 +25,9 @@ export const VisualCard: React.FC<VisualCardProps> = React.memo(({
 
   const template = templateRecommendation as VisualTemplate;
   const coverMain = coverTextOverride !== undefined ? coverTextOverride : (elements?.coverText?.main || "标题");
-  // Treat empty string as null to hide elements
   const coverSub = (coverSubOverride !== undefined ? coverSubOverride : (elements?.coverText?.sub || "")).trim();
-  const points = elements?.knowledgePoints || [];
+  // Use override or original data
+  const points = pointsOverride !== undefined ? pointsOverride : (elements?.knowledgePoints || []);
 
   const getTitleStyle = (baseSizeRem: number) => ({
       fontSize: `${baseSizeRem * coverFontSize}rem`,
@@ -103,10 +105,7 @@ export const VisualCard: React.FC<VisualCardProps> = React.memo(({
                   <div className="p-6 font-mono text-xs space-y-2 text-gray-600">
                       <div className="flex justify-between"><span>ITEM:</span><span className="font-bold">TRENDING</span></div>
                       <div className="flex justify-between"><span>DATE:</span><span>{new Date().toLocaleDateString()}</span></div>
-                      <div className="mt-4 pt-4 border-t border-black flex justify-between items-end">
-                          <div className="h-8 w-32 bg-gray-800"></div>
-                          <span className="font-bold text-lg">#001</span>
-                      </div>
+                      {points.length > 0 && <div className="mt-2 border-t border-gray-300 pt-2 space-y-1">{points.slice(0,3).map((p,i) => <div key={i}>- {p}</div>)}</div>}
                   </div>
                   <div className="absolute bottom-0 left-0 right-0 h-2 bg-[#eee]" style={{ clipPath: 'polygon(0% 100%, 5% 0%, 10% 100%, 15% 0%, 20% 100%, 25% 0%, 30% 100%, 35% 0%, 40% 100%, 45% 0%, 50% 100%, 55% 0%, 60% 100%, 65% 0%, 70% 100%, 75% 0%, 80% 100%, 85% 0%, 90% 100%, 95% 0%, 100% 100%)' }}></div>
               </div>
@@ -118,7 +117,7 @@ export const VisualCard: React.FC<VisualCardProps> = React.memo(({
   if (template === 'polaroid') {
       return (
           <div className={`${containerClass} bg-gray-200 p-6 flex items-center justify-center`}>
-              <div className="bg-white shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] p-4 pb-16 w-full transform -rotate-2 border border-gray-100">
+              <div className="bg-white shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] p-4 pb-16 w-full transform -rotate-2 border border-gray-100 relative">
                   <div className="aspect-square bg-gray-100 overflow-hidden relative mb-6 shadow-inner">
                       <ImageLayer />
                   </div>
@@ -126,6 +125,12 @@ export const VisualCard: React.FC<VisualCardProps> = React.memo(({
                       <h1 className="font-bold text-gray-800 rotate-1" style={getTitleStyle(1.8)}>{coverMain}</h1>
                       {coverSub && <p className="text-gray-500 text-sm mt-1">{coverSub}</p>}
                   </div>
+                  {/* Points as stickers or notes on polaroid */}
+                  {points.length > 0 && (
+                      <div className="absolute bottom-2 right-2 transform rotate-3">
+                          <span className="bg-yellow-200 text-[10px] px-2 py-1 shadow-sm font-handwriting">{points[0]}</span>
+                      </div>
+                  )}
               </div>
           </div>
       );
@@ -160,6 +165,14 @@ export const VisualCard: React.FC<VisualCardProps> = React.memo(({
                       </div>
                       <div className="w-8 h-8 bg-black rounded-full flex items-center justify-center flex-shrink-0 text-white text-[10px] font-bold">ME</div>
                   </div>
+                  {points.length > 0 && (
+                       <div className="flex gap-2 items-end">
+                           <div className="w-8 h-8 bg-gray-300 rounded-full overflow-hidden flex-shrink-0 border border-white"></div>
+                           <div className="bg-white rounded-2xl rounded-bl-none p-3 shadow-sm max-w-[85%] border border-gray-200">
+                               <p className="text-sm text-gray-800">{points[0]}</p>
+                           </div>
+                       </div>
+                  )}
               </div>
           </div>
       );
@@ -177,12 +190,12 @@ export const VisualCard: React.FC<VisualCardProps> = React.memo(({
               <h1 className="font-extrabold text-gray-900 mb-4 tracking-tight" style={getTitleStyle(2.5)}>{coverMain}</h1>
               <div className="space-y-3 mb-6">
                   {coverSub && <p className="text-gray-500 font-medium text-sm border-l-2 border-gray-300 pl-3">{coverSub}</p>}
-                  {points.slice(0, 2).map((p, i) => (
+                  {points.slice(0, 3).map((p, i) => (
                       <div key={i} className="flex items-start gap-2 text-gray-700"><span className="text-gray-400">•</span><span className="text-sm">{p}</span></div>
                   ))}
               </div>
               {backgroundImage && (
-                  <div className="w-full h-40 rounded-xl overflow-hidden shadow-sm border border-black/5 relative">
+                  <div className="w-full h-40 rounded-xl overflow-hidden shadow-sm border border-black/5 relative mt-auto">
                       <ImageLayer />
                   </div>
               )}
@@ -252,12 +265,12 @@ export const VisualCard: React.FC<VisualCardProps> = React.memo(({
                     {coverMain}
                 </h1>
                 {coverSub && <p className="text-white/80 text-xs font-medium uppercase tracking-widest">{coverSub}</p>}
+                {points.length > 0 && <div className="mt-2 pt-2 border-t border-white/20 text-[8px] text-white/70">{points[0]}</div>}
             </div>
          </div>
       </div>
     );
   }
 
-  // Fallback for unknown/removed templates
-  return <div className={containerClass + " flex items-center justify-center p-4"}>Select a style</div>; 
+  return null; 
 });

@@ -3,16 +3,16 @@ import { InputType, RednoteResponse, SearchResult, SearchSource, RednoteTone, Me
 
 const apiKey = process.env.API_KEY;
 
-const PRO_MODEL = 'gemini-3-pro-preview'; 
-const FALLBACK_PRO = 'gemini-1.5-pro';
-const FAST_MODEL = 'gemini-2.5-flash'; 
+// --- Model Configuration ---
+// STRICT REQUIREMENT: Global usage of 'gemini-3-pro-preview' for ALL tasks.
+const MODEL_NAME = 'gemini-3-pro-preview'; 
 
 // --- System Instructions ---
 
 const SYSTEM_INSTRUCTION = `
 System Instruction: Rednote Creator Engine (Chinese Version)
 1. Role: You are the "Rednote Creator". Transform inputs into viral Xiaohongshu posts.
-**CRITICAL: OUTPUT MUST BE IN SIMPLIFIED CHINESE (简体中文).**
+**CRITICAL: OUTPUT MUST BE IN SIMPLIFIED CHINESE.**
 
 2. JSON Structure (Strict):
 {
@@ -25,10 +25,10 @@ System Instruction: Rednote Creator Engine (Chinese Version)
     "tags": ["#Tag1"]
   },
   "visualData": {
-    "templateRecommendation": "memo",
+    "templateRecommendation": "card",
     "elements": {
       "coverText": { "main": "Cover Title", "sub": "Subtitle" },
-      "knowledgePoints": ["Point 1", "Point 2"],
+      "knowledgePoints": ["Point 1", "Point 2", "Point 3"],
       "literatureInfo": { "titleEn": "Eng Title", "abstractCn": "Abstract", "citation": "Source" }
     }
   }
@@ -37,16 +37,22 @@ Return ONLY valid JSON. No markdown formatting.
 `;
 
 const SEARCH_SYSTEM_INSTRUCTION = `
-You are a ULTRA-FAST news aggregator.
+You are a smart news aggregator & content parser.
 **CRITICAL RULES:**
-1. **SPEED IS KEY**: Return results immediately.
-2. **IMAGE**: Find the main article image URL (OG:Image) if possible.
-3. **URL ANALYSIS**: If the query is a URL, extract its Title, Summary, and Main Image.
-4. **LANGUAGE**: All summaries in Simplified Chinese.
-5. Return JSON only.
+1. **IMAGE IS PRIORITY**: Try to find the main article image (OpenGraph Image, Hero Image) URL. Return it in 'imageUrl'.
+2. If the query is a URL, summarize that specific page.
+3. Return JSON only.
 {
   "results": [
-    { "id": "1", "title": "Title", "url": "...", "source": "...", "date": "...", "snippet": "...", "imageUrl": "..." }
+    { 
+      "id": "1", 
+      "title": "Title", 
+      "url": "...", 
+      "source": "...", 
+      "date": "...", 
+      "snippet": "...", 
+      "imageUrl": "https://..." 
+    }
   ]
 }
 `;
@@ -79,50 +85,61 @@ export const analyzeMedia = async (
     if (!finalKey) throw new Error("API Key missing");
     const ai = new GoogleGenAI({ apiKey: finalKey });
 
-    const prompt = `
-    Analyze the attached file/content. 
-    Output a JSON object with two fields:
-    1. "summary": A concise introduction of the content (max 100 words).
-    2. "corePoints": An array of 3-5 key takeaways or core value points.
-    **LANGUAGE: SIMPLIFIED CHINESE ONLY.**
-    Output JSON ONLY.
-    `;
+    let prompt = "";
+    let parts: any[] = [];
+    let tools: any[] | undefined = undefined;
 
-    const parts: any[] = [{ text: prompt }];
     if (inputType === 'Type A') {
-        const desc = fileData.description || "No description provided. Analyze general context.";
-        parts.push({ text: "Video Context/Transcript: " + desc });
+        if (fileData.url) {
+            // Video URL Analysis (Force Parse via Search)
+            prompt = `
+            Task: Analyze the content of this Video URL: ${fileData.url}
+            1. What is this video about? (Summary)
+            2. Extract 3-5 Core Key Points / Takeaways from the video content.
+            **LANGUAGE: SIMPLIFIED CHINESE ONLY.**
+            Output JSON: { "summary": "...", "corePoints": ["...", "..."] }
+            `;
+            parts = [{ text: prompt }];
+            tools = [{ googleSearch: {} }]; // Enable search to read the URL
+        } else {
+            // Video Description Analysis
+            prompt = `
+            Analyze this video description/transcript context.
+            **LANGUAGE: SIMPLIFIED CHINESE ONLY.**
+            Output JSON: { "summary": "...", "corePoints": ["...", "..."] }
+            `;
+            const desc = fileData.description || "No description provided.";
+            parts = [{ text: prompt + "\n\nContext: " + desc }];
+        }
     } else if (inputType === 'Type B') {
+        // PDF Analysis
         if (!fileData.base64) throw new Error("No PDF file data found.");
-        parts.push({ inlineData: { mimeType: fileData.mimeType || 'application/pdf', data: fileData.base64 } });
+        prompt = `
+        Analyze the attached PDF document.
+        1. Summarize the abstract/intro.
+        2. Extract 3-5 Core Key Points.
+        **LANGUAGE: SIMPLIFIED CHINESE ONLY.**
+        Output JSON: { "summary": "...", "corePoints": ["...", "..."] }
+        `;
+        parts = [
+            { text: prompt },
+            { inlineData: { mimeType: fileData.mimeType || 'application/pdf', data: fileData.base64 } }
+        ];
     }
 
-    const tryGenerate = async (modelName: string) => {
-        try {
-            const response = await ai.models.generateContent({
-                model: modelName, 
-                contents: { parts },
-                config: { responseMimeType: "application/json" }
-            });
-            return extractJSON(response.text || "{}") as MediaAnalysis;
-        } catch (e: any) {
-            console.warn(`Model ${modelName} failed:`, e.message);
-            throw e;
-        }
-    };
-
     try {
-        return await tryGenerate(PRO_MODEL);
-    } catch (e1) {
-        try {
-            return await tryGenerate(FALLBACK_PRO);
-        } catch (e2) {
-            try {
-                return await tryGenerate(FAST_MODEL);
-            } catch (finalError: any) {
-                throw new Error(`Analysis failed completely.`);
+        const response = await ai.models.generateContent({
+            model: MODEL_NAME, 
+            contents: { parts },
+            config: { 
+                responseMimeType: "application/json",
+                tools: tools 
             }
-        }
+        });
+        return extractJSON(response.text || "{}") as MediaAnalysis;
+    } catch (e: any) {
+        console.error("Analysis failed:", e);
+        throw new Error(`Analysis failed: ${e.message}`);
     }
 };
 
@@ -142,13 +159,11 @@ export const askAI = async (
     **LANGUAGE: SIMPLIFIED CHINESE ONLY.**
     `;
 
-    const tryAsk = async (model: string) => {
-        const response = await ai.models.generateContent({ model, contents: prompt });
+    try {
+        const response = await ai.models.generateContent({ model: MODEL_NAME, contents: prompt });
         return response.text || "No answer generated.";
-    };
-
-    try { return await tryAsk(PRO_MODEL); } catch {
-        try { return await tryAsk(FALLBACK_PRO); } catch { return await tryAsk(FAST_MODEL); }
+    } catch {
+        return "AI Error.";
     }
 };
 
@@ -163,30 +178,32 @@ export const searchTrends = async (query: string, sources: SearchSource[], custo
   let fullQuery = "";
   
   if (customSource && (customSource.startsWith('http') || customSource.includes('www'))) {
-      // FORCE OPEN MODE: Specific URL Analysis
       fullQuery = `Analyze this specific URL: ${customSource}. 
       Task 1: Extract the Title and a 1-sentence Summary.
       Task 2: Extract the MAIN HERO IMAGE URL (start with http).
       **LANGUAGE: SIMPLIFIED CHINESE.**`;
   } else {
-      // FAST SEARCH MODE
       const platformKeywords: string[] = sources.map(s => {
         if (s === 'x') return 'site:twitter.com OR site:x.com';
         if (s === 'google') return ''; 
         return '';
       });
       
+      if (customSource && customSource.trim()) {
+          platformKeywords.push(`site:${customSource.trim()}`);
+      }
+
       const sourceFilter = platformKeywords.filter(Boolean).join(' OR ');
       const qText = query || "Latest trending news";
-      fullQuery = `Find top 5 latest results for: "${qText}" ${sourceFilter ? `(${sourceFilter})` : ''}. 
-      Return JSON list. Snippets < 50 chars.
-      **LANGUAGE: SIMPLIFIED CHINESE.**`;
+      fullQuery = `"${qText}" ${sourceFilter ? `(${sourceFilter})` : ''}`;
   }
 
   try {
     const response = await ai.models.generateContent({
-      model: FAST_MODEL, // Always use Flash for search speed
-      contents: fullQuery,
+      model: MODEL_NAME,
+      contents: `Task: ${fullQuery}. 
+      Return strictly JSON list with 'imageUrl' if found.
+      **LANGUAGE: SIMPLIFIED CHINESE.**`,
       config: {
         tools: [{ googleSearch: {} }],
         systemInstruction: SEARCH_SYSTEM_INSTRUCTION,
@@ -219,7 +236,7 @@ export const searchTrends = async (query: string, sources: SearchSource[], custo
         source: r.source || "Web",
         url: r.url, 
         date: r.date,
-        imageUrl: r.imageUrl 
+        imageUrl: r.imageUrl // Ensure this is passed
     }));
   } catch (error) {
     console.warn("Search extraction failed", error);
@@ -283,9 +300,9 @@ export const generateRednote = async (
       if (tone !== 'imitate') promptParts.push({ text: `Topic: ${inputText}` });
   }
 
-  const tryGenerate = async (model: string) => {
+  try {
       const response = await ai.models.generateContent({
-          model: model,
+          model: MODEL_NAME,
           contents: { parts: promptParts },
           config: { systemInstruction: SYSTEM_INSTRUCTION },
       });
@@ -295,17 +312,9 @@ export const generateRednote = async (
       if (!Array.isArray(safeJson.content.titles_options)) safeJson.content.titles_options = [safeJson.content.title || "Title"];
       if (!safeJson.visualData) safeJson.visualData = { elements: { coverText: { main: safeJson.content.title, sub: "" } } };
       return safeJson as RednoteResponse;
-  };
-
-  try {
-      return await tryGenerate(PRO_MODEL);
   } catch (e) {
-      console.warn("Pro generation failed, retrying with fallback...", e);
-      try {
-          return await tryGenerate(FALLBACK_PRO);
-      } catch {
-          return await tryGenerate(FAST_MODEL);
-      }
+      console.error("Generation failed", e);
+      throw e;
   }
 };
 
@@ -323,7 +332,7 @@ export const regenerateTitles = async (currentTopic: string, referenceTitle: str
 
     try {
         const response = await ai.models.generateContent({
-            model: FAST_MODEL,
+            model: MODEL_NAME,
             contents: prompt,
         });
         const json = extractJSON(response.text || "[]");
@@ -333,31 +342,37 @@ export const regenerateTitles = async (currentTopic: string, referenceTitle: str
     }
 };
 
-export const rewriteContent = async (currentContent: string, referenceArticle: string, apiKey?: string): Promise<string> => {
+export const rewriteContent = async (
+    currentContent: string, 
+    referenceArticle: string, 
+    customInstruction: string,
+    apiKey?: string
+): Promise<string> => {
     const finalKey = apiKey || process.env.API_KEY;
     const ai = new GoogleGenAI({ apiKey: finalKey });
 
     const prompt = `
     Role: Rednote Editor.
-    Task: Rewrite or Polish the content below.
-    ${referenceArticle ? `Style Ref: """${referenceArticle}"""` : 'Instruction: Make it more engaging/concise/viral.'}
-    Content: """${currentContent}"""
+    Task: Rewrite the content below.
+    
+    ${customInstruction ? `Custom Instruction: "${customInstruction}"` : ''}
+    ${referenceArticle ? `Style Reference: """${referenceArticle}"""` : ''}
+    
+    Content to Rewrite:
+    """${currentContent}"""
+    
     **LANGUAGE: SIMPLIFIED CHINESE.**
     Output the new content directly.
     `;
 
-    const tryRewrite = async (model: string) => {
+    try {
         const response = await ai.models.generateContent({
-            model: model,
+            model: MODEL_NAME,
             contents: prompt,
         });
         return response.text || currentContent;
-    };
-
-    try {
-        return await tryRewrite(PRO_MODEL);
-    } catch {
-        try { return await tryRewrite(FALLBACK_PRO); } catch { return await tryRewrite(FAST_MODEL); }
+    } catch (e) {
+        return currentContent;
     }
 };
 
@@ -376,7 +391,7 @@ export const regenerateCoverTitle = async (topic: string, currentTitle: string, 
 
     try {
         const response = await ai.models.generateContent({
-            model: FAST_MODEL,
+            model: MODEL_NAME,
             contents: prompt,
         });
         return response.text?.trim().replace(/^"|"$/g, '') || currentTitle;

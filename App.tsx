@@ -3,7 +3,7 @@ import { generateRednote, searchTrends, regenerateTitles, rewriteContent, regene
 import { InputType, RednoteResponse, SearchResult, SearchSource, VideoFrame, VisualTemplate, RednoteTone, MediaAnalysis } from './types';
 // Lazy load VisualCard
 const VisualCard = React.lazy(() => import('./components/VisualCard').then(module => ({ default: module.VisualCard })));
-import { Sparkles, Copy, Loader2, Video, Type, Search, Check, Upload, Image as ImageIcon, Globe, Youtube, Twitter, ArrowLeft, PenTool, FileText, RefreshCw, Wand2, Link as LinkIcon, Key, X, PlayCircle, Dice5, CheckCircle, AlertCircle, Layout, Type as TypeIcon, MessageSquare, BrainCircuit } from 'lucide-react';
+import { Sparkles, Copy, Loader2, Video, Type, Search, Check, Upload, Image as ImageIcon, Globe, Youtube, Twitter, ArrowLeft, PenTool, FileText, RefreshCw, Wand2, Link as LinkIcon, Key, X, PlayCircle, Dice5, CheckCircle, AlertCircle, Layout, Type as TypeIcon, MessageSquare, BrainCircuit, Plus, Trash2 } from 'lucide-react';
 
 const App: React.FC = () => {
   const [step, setStep] = useState<'input' | 'result'>('input');
@@ -16,6 +16,7 @@ const App: React.FC = () => {
   // Input State
   const [inputType, setInputType] = useState<InputType>('Type A');
   const [inputText, setInputText] = useState('');
+  const [videoUrlInput, setVideoUrlInput] = useState(''); // New Video URL input
   const [selectedTone, setSelectedTone] = useState<RednoteTone>('emotional');
   const [imitateText, setImitateText] = useState(''); 
   
@@ -47,7 +48,11 @@ const App: React.FC = () => {
   const [isRegeneratingTitle, setIsRegeneratingTitle] = useState(false);
   const [isRegeneratingBody, setIsRegeneratingBody] = useState(false);
   const [isRegeneratingCover, setIsRegeneratingCover] = useState(false);
-  const [rewritingIndex, setRewritingIndex] = useState<number | null>(null); // New: Track which paragraph is rewriting
+  const [rewritingIndex, setRewritingIndex] = useState<number | null>(null);
+  
+  // Rewrite Custom State
+  const [showRewriteModal, setShowRewriteModal] = useState(false);
+  const [rewriteInstruction, setRewriteInstruction] = useState('');
   
   // Ask AI State
   const [askQuestion, setAskQuestion] = useState('');
@@ -59,6 +64,7 @@ const App: React.FC = () => {
   const [editableTitle, setEditableTitle] = useState('');
   const [editableCoverText, setEditableCoverText] = useState('');
   const [editableCoverSub, setEditableCoverSub] = useState('');
+  const [editablePoints, setEditablePoints] = useState<string[]>([]); // New: Editable Points
   const [editableBody, setEditableBody] = useState('');
   const [selectedTemplate, setSelectedTemplate] = useState<VisualTemplate>('apple_note');
   const [customCoverImage, setCustomCoverImage] = useState<string | null>(null);
@@ -153,7 +159,12 @@ const App: React.FC = () => {
       try {
           let data: any = {};
           if (inputType === 'Type A') {
-              data = { description: inputText || "Video content" }; // Simulating since we can't upload video bytes easily in pure frontend
+              // Handle Video URL or Description
+              if (videoUrlInput.trim()) {
+                  data = { url: videoUrlInput.trim() };
+              } else {
+                  data = { description: inputText || "Video content" }; 
+              }
           } else if (inputType === 'Type B' && pdfBase64) {
               data = { base64: pdfBase64, mimeType: pdfFile?.type };
           }
@@ -209,7 +220,7 @@ const App: React.FC = () => {
   const handleGenerate = async () => {
     if (!userApiKey) { setIsKeyModalOpen(true); return; }
 
-    const hasInput = !!inputText.trim();
+    const hasInput = !!inputText.trim() || !!videoUrlInput.trim();
     const hasCustomLink = !!customSearchSource.trim();
     const hasContextTypeC = inputType === 'Type C' && selectedResultIds.size > 0;
     
@@ -241,7 +252,7 @@ const App: React.FC = () => {
           contextData = { ...contextData, fileData: pdfBase64, mimeType: pdfFile?.type };
       }
 
-      const finalInputText = inputText || "Generate content based on provided context";
+      const finalInputText = inputText || videoUrlInput || "Generate content based on provided context";
       
       const data = await generateRednote(inputType, finalInputText, contextData, selectedTone, imitateText, userApiKey);
       
@@ -249,6 +260,7 @@ const App: React.FC = () => {
       setEditableTitle(data.content.title);
       setEditableCoverText(data.visualData.elements.coverText.main);
       setEditableCoverSub(data.visualData.elements.coverText.sub);
+      setEditablePoints(data.visualData.elements.knowledgePoints || []); // Init points
       setEditableBody(data.content.fullText);
       setSelectedTemplate(data.visualData.templateRecommendation as VisualTemplate);
       
@@ -276,20 +288,21 @@ const App: React.FC = () => {
       setIsRegeneratingBody(true);
       try {
           const styleRef = selectedTone === 'imitate' ? imitateText : "";
-          const newBody = await rewriteContent(editableBody, styleRef, userApiKey);
+          const newBody = await rewriteContent(editableBody, styleRef, rewriteInstruction, userApiKey); // Pass custom instruction
           setEditableBody(newBody);
       } catch (e) { alert("生成失败"); }
       setIsRegeneratingBody(false);
+      setShowRewriteModal(false);
   };
 
   const onRegenerateParagraph = async (paragraph: string, index: number) => {
       if (!userApiKey) { setIsKeyModalOpen(true); return; }
-      setRewritingIndex(index); // Start loader for this paragraph
+      setRewritingIndex(index); 
       try {
-          const newText = await rewriteContent(paragraph, selectedTone === 'imitate' ? imitateText : "", userApiKey);
+          const newText = await rewriteContent(paragraph, selectedTone === 'imitate' ? imitateText : "", "", userApiKey);
           setEditableBody(prev => prev.replace(paragraph, newText));
       } catch(e) { alert("重写失败"); }
-      setRewritingIndex(null); // Stop loader
+      setRewritingIndex(null); 
   };
 
   const onRegenerateCoverTitle = async () => {
@@ -312,6 +325,15 @@ const App: React.FC = () => {
       setIsAsking(false);
   };
 
+  const updatePoint = (idx: number, val: string) => {
+      const newPoints = [...editablePoints];
+      newPoints[idx] = val;
+      setEditablePoints(newPoints);
+  };
+
+  const addPoint = () => setEditablePoints([...editablePoints, "新知识点"]);
+  const removePoint = (idx: number) => setEditablePoints(editablePoints.filter((_, i) => i !== idx));
+
   const getVisualBackground = () => {
       if (customCoverImage) return customCoverImage;
       if (inputType === 'Type A') return frames.find(f => f.id === selectedFrameId)?.url || null;
@@ -323,12 +345,32 @@ const App: React.FC = () => {
       templateRecommendation: selectedTemplate
   } : null;
 
-  // Helper to split body into paragraphs for the "Rewrite Paragraph" feature
   const bodyParagraphs = editableBody.split('\n').filter(p => p.trim().length > 0);
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-gray-900 font-sans relative">
       
+      {/* REWRITE MODAL */}
+      {showRewriteModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl">
+                  <h3 className="font-bold text-lg mb-4">全文重写要求</h3>
+                  <textarea 
+                    className="w-full p-3 border rounded-lg h-24 mb-4 focus:ring-2 focus:ring-purple-500 outline-none"
+                    placeholder="例如：更幽默一点、增加emoji、强调性价比..."
+                    value={rewriteInstruction}
+                    onChange={e => setRewriteInstruction(e.target.value)}
+                  />
+                  <div className="flex justify-end gap-2">
+                      <button onClick={() => setShowRewriteModal(false)} className="px-4 py-2 text-gray-500 hover:bg-gray-100 rounded-lg">取消</button>
+                      <button onClick={onRegenerateBody} disabled={isRegeneratingBody} className="bg-purple-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 disabled:opacity-50">
+                          {isRegeneratingBody ? <Loader2 className="animate-spin" size={16}/> : <Wand2 size={16}/>} 开始重写
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
+
       {/* ASK AI MODAL */}
       {showAskModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -364,7 +406,7 @@ const App: React.FC = () => {
           </div>
       )}
 
-      {/* API Key Modal (Same as before) */}
+      {/* API Key Modal */}
       {isKeyModalOpen && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm p-4">
               <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl animate-fade-in">
@@ -468,18 +510,39 @@ const App: React.FC = () => {
                 {(inputType === 'Type A' || inputType === 'Type B') && (
                     <div className="space-y-6">
                         <div className="border-2 border-dashed border-gray-300 rounded-2xl p-8 text-center hover:bg-gray-50 relative group cursor-pointer">
-                            <input type="file" accept={inputType === 'Type A' ? "video/*" : "application/pdf"} onChange={inputType === 'Type A' ? handleVideoUpload : handlePdfUpload} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
-                            {inputType === 'Type A' ? <Upload className="mx-auto text-gray-400 mb-2" size={28} /> : <FileText className="mx-auto text-blue-400 mb-2" size={28} />}
-                            <span className="text-sm font-bold text-gray-700">
-                                {inputType === 'Type A' 
-                                    ? (videoFile ? videoFile.name : "点击上传视频 (Gemini Pro 分析)")
-                                    : (pdfFile ? pdfFile.name : "点击上传论文 PDF (Gemini Pro 分析)")
-                                }
-                            </span>
+                            {inputType === 'Type A' ? (
+                                <div className="flex flex-col gap-4">
+                                    {/* Video URL Input */}
+                                    <div className="relative">
+                                        <LinkIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
+                                        <input 
+                                            className="w-full pl-9 p-3 bg-gray-50 border rounded-xl text-sm focus:ring-2 focus:ring-[#ff2442] outline-none"
+                                            placeholder="粘贴视频链接 (Gemini Pro 分析)..."
+                                            value={videoUrlInput}
+                                            onChange={(e) => setVideoUrlInput(e.target.value)}
+                                        />
+                                    </div>
+                                    <div className="text-center text-xs text-gray-400">OR</div>
+                                    {/* File Input */}
+                                    <div className="relative">
+                                        <input type="file" accept="video/*" onChange={handleVideoUpload} className="absolute inset-0 opacity-0 cursor-pointer z-10 w-full h-full" />
+                                        <div className="flex items-center justify-center gap-2 text-gray-500 hover:text-[#ff2442]">
+                                            <Upload size={20} />
+                                            <span className="text-sm font-bold">{videoFile ? videoFile.name : "上传视频文件"}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            ) : (
+                                <>
+                                    <input type="file" accept="application/pdf" onChange={handlePdfUpload} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
+                                    <FileText className="mx-auto text-blue-400 mb-2" size={28} />
+                                    <span className="text-sm font-bold text-gray-700">{pdfFile ? pdfFile.name : "点击上传论文 PDF (Gemini Pro 分析)"}</span>
+                                </>
+                            )}
                         </div>
                         
                         {/* Analysis Section */}
-                        {(videoFile || pdfFile) && (
+                        {(videoFile || pdfFile || videoUrlInput) && (
                             <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
                                 <div className="flex justify-between items-center mb-3">
                                     <h3 className="text-sm font-bold text-blue-900 flex items-center gap-2">
@@ -506,21 +569,14 @@ const App: React.FC = () => {
                             </div>
                         )}
 
-                        {inputType === 'Type A' && (
-                            <>
-                                {frames.length > 0 && (
-                                    <div className="grid grid-cols-3 gap-2">
-                                        {frames.map(frame => (
-                                            <div key={frame.id} onClick={() => setSelectedFrameId(selectedFrameId === frame.id ? null : frame.id)} className={`aspect-video rounded-lg overflow-hidden border-2 cursor-pointer relative ${selectedFrameId === frame.id ? 'border-[#ff2442]' : 'border-transparent'}`}><img src={frame.url} className="w-full h-full object-cover" />{selectedFrameId === frame.id && <div className="absolute inset-0 bg-[#ff2442]/30 flex items-center justify-center"><Check className="text-white" /></div>}</div>
-                                        ))}
-                                    </div>
-                                )}
-                                <textarea className="w-full p-4 bg-gray-50 border border-gray-200 rounded-xl" placeholder="补充视频描述..." value={inputText} onChange={(e) => setInputText(e.target.value)} rows={3} />
-                            </>
+                        {inputType === 'Type A' && frames.length > 0 && (
+                            <div className="grid grid-cols-3 gap-2">
+                                {frames.map(frame => (
+                                    <div key={frame.id} onClick={() => setSelectedFrameId(selectedFrameId === frame.id ? null : frame.id)} className={`aspect-video rounded-lg overflow-hidden border-2 cursor-pointer relative ${selectedFrameId === frame.id ? 'border-[#ff2442]' : 'border-transparent'}`}><img src={frame.url} className="w-full h-full object-cover" />{selectedFrameId === frame.id && <div className="absolute inset-0 bg-[#ff2442]/30 flex items-center justify-center"><Check className="text-white" /></div>}</div>
+                                ))}
+                            </div>
                         )}
-                        {inputType === 'Type B' && (
-                            <textarea className="w-full p-4 bg-gray-50 border border-gray-200 rounded-xl h-32" placeholder="或者在此处粘贴论文摘要/笔记内容..." value={inputText} onChange={(e) => setInputText(e.target.value)} />
-                        )}
+                        {/* Removed redundant description text area, use input above if needed or keep clean */}
                     </div>
                 )}
 
@@ -557,11 +613,17 @@ const App: React.FC = () => {
                         <div className="mb-6 transform hover:scale-[1.02] transition-transform">
                             <Suspense fallback={<div className="aspect-[3/4] bg-gray-100 animate-pulse rounded-xl"/>}>
                                 {visualDataForPreview && (
-                                    <VisualCard data={visualDataForPreview} backgroundImage={getVisualBackground()} coverTextOverride={editableCoverText} coverSubOverride={editableCoverSub} coverFontSize={coverFontSize} />
+                                    <VisualCard 
+                                        data={visualDataForPreview} 
+                                        backgroundImage={getVisualBackground()} 
+                                        coverTextOverride={editableCoverText} 
+                                        coverSubOverride={editableCoverSub}
+                                        pointsOverride={editablePoints}
+                                        coverFontSize={coverFontSize} 
+                                    />
                                 )}
                             </Suspense>
                         </div>
-                        {/* ... Visual Controls ... */}
                         <div className="space-y-4">
                              <div>
                                  <label className="text-xs font-bold text-gray-900 block mb-2 flex items-center gap-1"><ImageIcon size={12}/> 封面背景图</label>
@@ -578,7 +640,7 @@ const App: React.FC = () => {
                              </div>
                              <div>
                                 <div className="flex justify-between items-center mb-2">
-                                    <label className="text-xs font-bold text-gray-900">封面大标题</label>
+                                    <label className="text-xs font-bold text-gray-900">封面内容编辑</label>
                                     <div className="flex items-center gap-2">
                                         <TypeIcon size={12} className="text-gray-400"/>
                                         <input type="range" min="0.5" max="3" step="0.1" value={coverFontSize} onChange={(e) => setCoverFontSize(parseFloat(e.target.value))} className="w-20 h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-[#ff2442]" />
@@ -590,12 +652,28 @@ const App: React.FC = () => {
                                         {isRegeneratingCover ? <Loader2 size={14} className="animate-spin"/> : <Wand2 size={14}/>}
                                     </button>
                                 </div>
-                                <input value={editableCoverSub} onChange={(e) => setEditableCoverSub(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-xs focus:ring-2 focus:ring-[#ff2442] outline-none" placeholder="副标题 (可选，清空即删除)" />
+                                <input value={editableCoverSub} onChange={(e) => setEditableCoverSub(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-xs focus:ring-2 focus:ring-[#ff2442] outline-none mb-2" placeholder="副标题 (可选，清空即删除)" />
+                                
+                                {/* Points Editor */}
+                                <div className="space-y-2">
+                                    <label className="text-xs text-gray-400">知识点 / 列表内容</label>
+                                    {editablePoints.map((p, idx) => (
+                                        <div key={idx} className="flex gap-1">
+                                            <input value={p} onChange={(e) => {
+                                                const newPoints = [...editablePoints];
+                                                newPoints[idx] = e.target.value;
+                                                setEditablePoints(newPoints);
+                                            }} className="flex-1 p-2 bg-gray-50 border border-gray-200 rounded-lg text-xs outline-none focus:border-[#ff2442]" />
+                                            <button onClick={() => setEditablePoints(editablePoints.filter((_, i) => i !== idx))} className="p-2 text-gray-400 hover:text-red-500"><Trash2 size={14}/></button>
+                                        </div>
+                                    ))}
+                                    <button onClick={() => setEditablePoints([...editablePoints, "新亮点"])} className="w-full py-2 border border-dashed border-gray-300 rounded-lg text-xs text-gray-500 hover:bg-gray-50 flex items-center justify-center gap-1"><Plus size={12}/> 添加行</button>
+                                </div>
                              </div>
                              <div>
                                 <label className="text-xs font-bold text-gray-900 block mb-2">设计风格</label>
                                 <div className="grid grid-cols-3 gap-2">
-                                    {['apple_note', 'memo', 'literature', 'magazine', 'notification', 'receipt', 'polaroid', 'chat'].map((t) => (
+                                    {['apple_note', 'canva_viral', 'card', 'memo', 'literature', 'subtitle', 'notification', 'receipt', 'polaroid', 'chat'].map((t) => (
                                         <button key={t} onClick={() => setSelectedTemplate(t as VisualTemplate)} className={`py-2 text-[9px] font-bold uppercase rounded border ${selectedTemplate === t ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-500 border-gray-100'}`}>{t.replace('_',' ')}</button>
                                     ))}
                                 </div>
@@ -604,7 +682,6 @@ const App: React.FC = () => {
                     </div>
                 </div>
                 <div className="lg:col-span-7 space-y-6">
-                    {/* ... Title List ... */}
                     <div className="bg-white rounded-3xl shadow-lg border border-gray-100 p-6">
                         <div className="flex justify-between items-center mb-4">
                             <h3 className="text-sm font-bold text-gray-400 uppercase flex items-center gap-2"><Type size={16}/> 选择标题</h3>
@@ -623,8 +700,6 @@ const App: React.FC = () => {
                             ))}
                         </div>
                     </div>
-
-                    {/* Main Editor with Paragraph Rewriting */}
                     <div className="bg-white rounded-3xl shadow-xl border border-gray-100 overflow-hidden">
                         <div className="px-6 py-4 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
                             <span className="text-sm font-bold text-gray-700 flex gap-2"><PenTool size={16} className="text-[#ff2442]"/> 内容编辑</span>
@@ -632,8 +707,8 @@ const App: React.FC = () => {
                                 <button onClick={() => setShowAskModal(true)} className="bg-blue-100 text-blue-700 px-3 py-2 rounded-full text-xs font-bold flex items-center gap-1 hover:bg-blue-200">
                                     <MessageSquare size={14}/> 问 AI
                                 </button>
-                                <button onClick={onRegenerateBody} disabled={isRegeneratingBody} className="bg-purple-100 text-purple-700 px-3 py-2 rounded-full text-xs font-bold flex items-center gap-1 hover:bg-purple-200">
-                                    {isRegeneratingBody ? <Loader2 size={14} className="animate-spin"/> : <Wand2 size={14}/>} 全文重写
+                                <button onClick={() => setShowRewriteModal(true)} className="bg-purple-100 text-purple-700 px-3 py-2 rounded-full text-xs font-bold flex items-center gap-1 hover:bg-purple-200">
+                                    <Wand2 size={14}/> 全文重写
                                 </button>
                                 <button onClick={() => { navigator.clipboard.writeText(`${editableTitle}\n\n${editableBody}`); setCopied(true); setTimeout(()=>setCopied(false),2000); }} className="bg-gray-900 text-white px-4 py-2 rounded-full text-xs font-bold flex gap-2 hover:bg-black">
                                     {copied ? <Check size={14}/> : <Copy size={14}/>} 复制
@@ -647,7 +722,6 @@ const App: React.FC = () => {
                              </div>
                              <div className="flex-1 relative">
                                  <label className="text-xs font-bold text-gray-400 uppercase block mb-2">正文内容 (悬停段落可重写)</label>
-                                 {/* Improved Text Editor with Paragraph Hover and Loading State */}
                                  <div className="w-full text-lg leading-8 text-gray-800 min-h-[300px] outline-none" contentEditable suppressContentEditableWarning onBlur={e => setEditableBody(e.currentTarget.innerText)}>
                                      {bodyParagraphs.map((para, i) => (
                                          <div key={i} className="relative group mb-4 hover:bg-gray-50 rounded-lg p-1 -ml-1 transition-colors">
