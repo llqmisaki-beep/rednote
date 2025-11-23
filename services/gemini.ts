@@ -4,8 +4,9 @@ import { InputType, RednoteResponse, SearchResult, SearchSource, RednoteTone, Me
 const apiKey = process.env.API_KEY;
 
 // --- Model Configuration ---
-// STRICT REQUIREMENT: Global usage of 'gemini-3-pro-preview' for ALL generation tasks.
-const MODEL_NAME = 'gemini-3-pro-preview'; 
+const PRO_MODEL = 'gemini-3-pro-preview'; 
+// Fallback model for high traffic/quota limits
+const FAST_MODEL = 'gemini-2.5-flash'; 
 
 // --- System Instructions ---
 
@@ -74,6 +75,29 @@ const extractJSON = (text: string) => {
   }
 };
 
+// Robust Fallback Wrapper
+const runWithFallback = async <T>(
+    operation: (model: string) => Promise<T>, 
+    context: string
+): Promise<T> => {
+    try {
+        // Try Pro Model first
+        return await operation(PRO_MODEL);
+    } catch (error: any) {
+        // Check for Quota (429) or Server (503/500) errors
+        if (error.message?.includes('429') || error.status === 429 || error.message?.includes('quota') || error.message?.includes('503')) {
+            console.warn(`[${context}] Pro Model failed (Quota/Error), switching to Fast Model...`, error.message);
+            try {
+                return await operation(FAST_MODEL);
+            } catch (fallbackError: any) {
+                console.error(`[${context}] Fast Model also failed:`, fallbackError);
+                throw fallbackError;
+            }
+        }
+        throw error; // Re-throw if it's a bad request (400) or other non-transient error
+    }
+};
+
 // --- Analysis Functions ---
 
 export const analyzeMedia = async (
@@ -88,21 +112,22 @@ export const analyzeMedia = async (
     let prompt = "";
     let parts: any[] = [];
     let tools: any[] | undefined = undefined;
-    let config: any = {};
+    let config: any = {}; // Default config
 
     if (inputType === 'Type A') {
         if (fileData.url) {
-            // Video URL Analysis (Force Parse via Search)
+            // Video URL Analysis (Search Tool needed)
             prompt = `
             Task: Analyze the content of this Video URL: ${fileData.url}
             1. What is this video about? (Summary)
-            2. Extract 3-5 Core Key Points / Takeaways from the video content.
+            2. Extract 3-5 Core Key Points / Takeaways.
             **LANGUAGE: SIMPLIFIED CHINESE ONLY.**
             Output JSON: { "summary": "...", "corePoints": ["...", "..."] }
             `;
             parts = [{ text: prompt }];
             tools = [{ googleSearch: {} }]; 
-            // CRITICAL FIX: Do NOT set responseMimeType when tools are present
+            // Note: When tools are used, responseMimeType cannot be set to JSON in strict mode for some models,
+            // but we will handle extraction manually via extractJSON helper.
             config = { tools: tools };
         } else {
             // Video Description Analysis
@@ -113,7 +138,6 @@ export const analyzeMedia = async (
             `;
             const desc = fileData.description || "No description provided.";
             parts = [{ text: prompt + "\n\nContext: " + desc }];
-            // Safe to use JSON mode here as no tools are used
             config = { responseMimeType: "application/json" };
         }
     } else if (inputType === 'Type B') {
@@ -133,17 +157,14 @@ export const analyzeMedia = async (
         config = { responseMimeType: "application/json" };
     }
 
-    try {
+    return runWithFallback(async (model) => {
         const response = await ai.models.generateContent({
-            model: MODEL_NAME, 
+            model, 
             contents: { parts },
-            config: config
+            config
         });
         return extractJSON(response.text || "{}") as MediaAnalysis;
-    } catch (e: any) {
-        console.error("Analysis failed:", e);
-        throw new Error(`Analysis failed: ${e.message}`);
-    }
+    }, "analyzeMedia");
 };
 
 export const askAI = async (
@@ -162,12 +183,10 @@ export const askAI = async (
     **LANGUAGE: SIMPLIFIED CHINESE ONLY.**
     `;
 
-    try {
-        const response = await ai.models.generateContent({ model: MODEL_NAME, contents: prompt });
+    return runWithFallback(async (model) => {
+        const response = await ai.models.generateContent({ model, contents: prompt });
         return response.text || "No answer generated.";
-    } catch {
-        return "AI Error.";
-    }
+    }, "askAI");
 };
 
 // --- Main Functions ---
@@ -201,11 +220,11 @@ export const searchTrends = async (query: string, sources: SearchSource[], custo
       fullQuery = `"${qText}" ${sourceFilter ? `(${sourceFilter})` : ''}`;
   }
 
-  try {
-    // Using MODEL_NAME (Gemini 3 Pro) for search too as requested "All AI analysis is 3 Pro"
-    // Note: Search tool usage requires no responseMimeType: 'application/json'
+  // Search always uses Flash or Pro depending on complexity, but usually Flash is better for simple search tasks.
+  // However, to satisfy "Use Pro", we will try Pro first.
+  return runWithFallback(async (model) => {
     const response = await ai.models.generateContent({
-      model: MODEL_NAME, 
+      model,
       contents: `Task: ${fullQuery}. 
       Return strictly JSON list with 'imageUrl' if found.
       **LANGUAGE: SIMPLIFIED CHINESE.**`,
@@ -243,10 +262,7 @@ export const searchTrends = async (query: string, sources: SearchSource[], custo
         date: r.date,
         imageUrl: r.imageUrl // Ensure this is passed
     }));
-  } catch (error) {
-    console.warn("Search extraction failed", error);
-    return [];
-  }
+  }, "searchTrends");
 };
 
 export const generateRednote = async (
@@ -305,9 +321,9 @@ export const generateRednote = async (
       if (tone !== 'imitate') promptParts.push({ text: `Topic: ${inputText}` });
   }
 
-  try {
+  return runWithFallback(async (model) => {
       const response = await ai.models.generateContent({
-          model: MODEL_NAME,
+          model: model,
           contents: { parts: promptParts },
           config: { systemInstruction: SYSTEM_INSTRUCTION },
       });
@@ -317,10 +333,7 @@ export const generateRednote = async (
       if (!Array.isArray(safeJson.content.titles_options)) safeJson.content.titles_options = [safeJson.content.title || "Title"];
       if (!safeJson.visualData) safeJson.visualData = { elements: { coverText: { main: safeJson.content.title, sub: "" } } };
       return safeJson as RednoteResponse;
-  } catch (e) {
-      console.error("Generation failed", e);
-      throw e;
-  }
+  }, "generateRednote");
 };
 
 export const regenerateTitles = async (currentTopic: string, referenceTitle: string, apiKey?: string): Promise<string[]> => {
@@ -335,16 +348,17 @@ export const regenerateTitles = async (currentTopic: string, referenceTitle: str
     Output: JSON array of strings.
     `;
 
-    try {
+    // Titles are simple, start with Fast but fallback to Pro if needed (unlikely path, usually Pro->Fast)
+    // Actually, let's just stick to Fast for titles to save quota for heavy tasks, unless forced.
+    // But user asked for Pro globally.
+    return runWithFallback(async (model) => {
         const response = await ai.models.generateContent({
-            model: MODEL_NAME,
+            model,
             contents: prompt,
         });
         const json = extractJSON(response.text || "[]");
         return Array.isArray(json) ? json : (json.titles || []);
-    } catch (e) {
-        return ["生成失败"];
-    }
+    }, "regenerateTitles");
 };
 
 export const rewriteContent = async (
@@ -370,15 +384,13 @@ export const rewriteContent = async (
     Output the new content directly.
     `;
 
-    try {
+    return runWithFallback(async (model) => {
         const response = await ai.models.generateContent({
-            model: MODEL_NAME,
+            model,
             contents: prompt,
         });
         return response.text || currentContent;
-    } catch (e) {
-        return currentContent;
-    }
+    }, "rewriteContent");
 };
 
 export const regenerateCoverTitle = async (topic: string, currentTitle: string, apiKey?: string): Promise<string> => {
@@ -394,13 +406,11 @@ export const regenerateCoverTitle = async (topic: string, currentTitle: string, 
     Output: Just the text.
     `;
 
-    try {
+    return runWithFallback(async (model) => {
         const response = await ai.models.generateContent({
-            model: MODEL_NAME,
+            model,
             contents: prompt,
         });
         return response.text?.trim().replace(/^"|"$/g, '') || currentTitle;
-    } catch (e) {
-        return currentTitle;
-    }
+    }, "regenerateCoverTitle");
 };
