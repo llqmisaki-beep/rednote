@@ -3,19 +3,16 @@ import { InputType, RednoteResponse, SearchResult, SearchSource, RednoteTone, Me
 
 const apiKey = process.env.API_KEY;
 
-// --- Model Configuration ---
-// STRICT REQUIREMENT: Use 'gemini-3-pro-preview' as the primary analysis model.
 const PRO_MODEL = 'gemini-3-pro-preview'; 
-// Fallbacks in case the preview model is unstable or inaccessible for the key
 const FALLBACK_PRO = 'gemini-1.5-pro';
-const FAST_MODEL = 'gemini-2.5-flash'; // Or 1.5-flash if 2.5 is not available
+const FAST_MODEL = 'gemini-2.5-flash'; 
 
 // --- System Instructions ---
 
 const SYSTEM_INSTRUCTION = `
 System Instruction: Rednote Creator Engine (Chinese Version)
 1. Role: You are the "Rednote Creator". Transform inputs into viral Xiaohongshu posts.
-**CRITICAL: OUTPUT MUST BE IN SIMPLIFIED CHINESE.**
+**CRITICAL: OUTPUT MUST BE IN SIMPLIFIED CHINESE (简体中文).**
 
 2. JSON Structure (Strict):
 {
@@ -28,7 +25,7 @@ System Instruction: Rednote Creator Engine (Chinese Version)
     "tags": ["#Tag1"]
   },
   "visualData": {
-    "templateRecommendation": "card",
+    "templateRecommendation": "memo",
     "elements": {
       "coverText": { "main": "Cover Title", "sub": "Subtitle" },
       "knowledgePoints": ["Point 1", "Point 2"],
@@ -40,22 +37,16 @@ Return ONLY valid JSON. No markdown formatting.
 `;
 
 const SEARCH_SYSTEM_INSTRUCTION = `
-You are a ULTRA-FAST news aggregator & content parser.
+You are a ULTRA-FAST news aggregator.
 **CRITICAL RULES:**
-1. **IMAGE IS PRIORITY**: You MUST try to find the main article image (OpenGraph Image, Hero Image) URL. Return it in 'imageUrl'.
-2. If the query is a URL, summarize that specific page.
-3. Return JSON only.
+1. **SPEED IS KEY**: Return results immediately.
+2. **IMAGE**: Find the main article image URL (OG:Image) if possible.
+3. **URL ANALYSIS**: If the query is a URL, extract its Title, Summary, and Main Image.
+4. **LANGUAGE**: All summaries in Simplified Chinese.
+5. Return JSON only.
 {
   "results": [
-    { 
-      "id": "1", 
-      "title": "Title", 
-      "url": "...", 
-      "source": "...", 
-      "date": "...", 
-      "snippet": "...", 
-      "imageUrl": "https://..." 
-    }
+    { "id": "1", "title": "Title", "url": "...", "source": "...", "date": "...", "snippet": "...", "imageUrl": "..." }
   ]
 }
 `;
@@ -77,7 +68,7 @@ const extractJSON = (text: string) => {
   }
 };
 
-// --- Analysis Functions (Pro Model with Robust Fallback) ---
+// --- Analysis Functions ---
 
 export const analyzeMedia = async (
     inputType: 'Type A' | 'Type B', 
@@ -93,23 +84,20 @@ export const analyzeMedia = async (
     Output a JSON object with two fields:
     1. "summary": A concise introduction of the content (max 100 words).
     2. "corePoints": An array of 3-5 key takeaways or core value points.
+    **LANGUAGE: SIMPLIFIED CHINESE ONLY.**
     Output JSON ONLY.
     `;
 
     const parts: any[] = [{ text: prompt }];
     if (inputType === 'Type A') {
-        // Video context
         const desc = fileData.description || "No description provided. Analyze general context.";
         parts.push({ text: "Video Context/Transcript: " + desc });
     } else if (inputType === 'Type B') {
-        // PDF Context
         if (!fileData.base64) throw new Error("No PDF file data found.");
         parts.push({ inlineData: { mimeType: fileData.mimeType || 'application/pdf', data: fileData.base64 } });
     }
 
-    // Helper to try models in sequence
     const tryGenerate = async (modelName: string) => {
-        console.log(`Attempting analysis with model: ${modelName}`);
         try {
             const response = await ai.models.generateContent({
                 model: modelName, 
@@ -123,20 +111,16 @@ export const analyzeMedia = async (
         }
     };
 
-    // 1. Try Requested PRO_MODEL (gemini-3-pro-preview)
     try {
         return await tryGenerate(PRO_MODEL);
     } catch (e1) {
-        // 2. Fallback to Stable Pro
         try {
             return await tryGenerate(FALLBACK_PRO);
         } catch (e2) {
-            // 3. Fallback to Flash
             try {
                 return await tryGenerate(FAST_MODEL);
             } catch (finalError: any) {
-                console.error("All analysis models failed:", finalError);
-                throw new Error(`Analysis failed completely. Please check your API Key permissions or file format. Details: ${finalError.message}`);
+                throw new Error(`Analysis failed completely.`);
             }
         }
     }
@@ -155,6 +139,7 @@ export const askAI = async (
     User Question: "${question}"
     
     Answer the user's question based on the context provided. Be helpful, concise, and professional.
+    **LANGUAGE: SIMPLIFIED CHINESE ONLY.**
     `;
 
     const tryAsk = async (model: string) => {
@@ -162,14 +147,8 @@ export const askAI = async (
         return response.text || "No answer generated.";
     };
 
-    try {
-        return await tryAsk(PRO_MODEL);
-    } catch {
-        try {
-            return await tryAsk(FALLBACK_PRO);
-        } catch {
-            return await tryAsk(FAST_MODEL);
-        }
+    try { return await tryAsk(PRO_MODEL); } catch {
+        try { return await tryAsk(FALLBACK_PRO); } catch { return await tryAsk(FAST_MODEL); }
     }
 };
 
@@ -184,30 +163,30 @@ export const searchTrends = async (query: string, sources: SearchSource[], custo
   let fullQuery = "";
   
   if (customSource && (customSource.startsWith('http') || customSource.includes('www'))) {
+      // FORCE OPEN MODE: Specific URL Analysis
       fullQuery = `Analyze this specific URL: ${customSource}. 
       Task 1: Extract the Title and a 1-sentence Summary.
-      Task 2: Extract the MAIN HERO IMAGE URL (start with http).`;
+      Task 2: Extract the MAIN HERO IMAGE URL (start with http).
+      **LANGUAGE: SIMPLIFIED CHINESE.**`;
   } else {
+      // FAST SEARCH MODE
       const platformKeywords: string[] = sources.map(s => {
         if (s === 'x') return 'site:twitter.com OR site:x.com';
         if (s === 'google') return ''; 
         return '';
       });
       
-      if (customSource && customSource.trim()) {
-          platformKeywords.push(`site:${customSource.trim()}`);
-      }
-
       const sourceFilter = platformKeywords.filter(Boolean).join(' OR ');
       const qText = query || "Latest trending news";
-      fullQuery = `"${qText}" ${sourceFilter ? `(${sourceFilter})` : ''}`;
+      fullQuery = `Find top 5 latest results for: "${qText}" ${sourceFilter ? `(${sourceFilter})` : ''}. 
+      Return JSON list. Snippets < 50 chars.
+      **LANGUAGE: SIMPLIFIED CHINESE.**`;
   }
 
   try {
     const response = await ai.models.generateContent({
-      model: FAST_MODEL, // Keep Flash for search speed
-      contents: `Task: ${fullQuery}. 
-      Return strictly JSON list with 'imageUrl' if found.`,
+      model: FAST_MODEL, // Always use Flash for search speed
+      contents: fullQuery,
       config: {
         tools: [{ googleSearch: {} }],
         systemInstruction: SEARCH_SYSTEM_INSTRUCTION,
@@ -274,6 +253,7 @@ export const generateRednote = async (
       ## Output:
       1. 5 Viral Titles.
       2. Content mimicking the reference style.
+      **LANGUAGE: SIMPLIFIED CHINESE.**
       `;
   } else {
       switch (tone) {
@@ -285,10 +265,9 @@ export const generateRednote = async (
   }
 
   let promptParts: any[] = [
-      { text: `inputType: ${inputType}\n\n${toneInstruction}` }
+      { text: `inputType: ${inputType}\n\n${toneInstruction}\n\n**IMPORTANT: OUTPUT IN SIMPLIFIED CHINESE.**` }
   ];
   
-  // Pass Analysis data if available
   if (contextData && contextData.analysis) {
       promptParts.push({ text: `\n\nPre-Analysis Summary: ${contextData.analysis.summary}\nCore Points: ${contextData.analysis.corePoints.join(', ')}` });
   }
@@ -304,7 +283,6 @@ export const generateRednote = async (
       if (tone !== 'imitate') promptParts.push({ text: `Topic: ${inputText}` });
   }
 
-  // Retry logic for generation
   const tryGenerate = async (model: string) => {
       const response = await ai.models.generateContent({
           model: model,
@@ -339,12 +317,13 @@ export const regenerateTitles = async (currentTopic: string, referenceTitle: str
     Task: Generate 5 NEW viral Xiaohongshu titles for: "${currentTopic}".
     Mimic style: "${referenceTitle}".
     Format: Emoji + Text.
+    **LANGUAGE: SIMPLIFIED CHINESE.**
     Output: JSON array of strings.
     `;
 
     try {
         const response = await ai.models.generateContent({
-            model: FAST_MODEL, // Use fast model for simple list generation
+            model: FAST_MODEL,
             contents: prompt,
         });
         const json = extractJSON(response.text || "[]");
@@ -363,6 +342,7 @@ export const rewriteContent = async (currentContent: string, referenceArticle: s
     Task: Rewrite or Polish the content below.
     ${referenceArticle ? `Style Ref: """${referenceArticle}"""` : 'Instruction: Make it more engaging/concise/viral.'}
     Content: """${currentContent}"""
+    **LANGUAGE: SIMPLIFIED CHINESE.**
     Output the new content directly.
     `;
 
@@ -381,7 +361,6 @@ export const rewriteContent = async (currentContent: string, referenceArticle: s
     }
 };
 
-// Cover Title Optimizer
 export const regenerateCoverTitle = async (topic: string, currentTitle: string, apiKey?: string): Promise<string> => {
     const finalKey = apiKey || process.env.API_KEY;
     const ai = new GoogleGenAI({ apiKey: finalKey });
@@ -391,6 +370,7 @@ export const regenerateCoverTitle = async (topic: string, currentTitle: string, 
     Topic: "${topic}"
     Current: "${currentTitle}"
     Requirement: Short, Impactful, No Punctuation.
+    **LANGUAGE: SIMPLIFIED CHINESE.**
     Output: Just the text.
     `;
 

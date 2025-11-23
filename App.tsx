@@ -47,6 +47,7 @@ const App: React.FC = () => {
   const [isRegeneratingTitle, setIsRegeneratingTitle] = useState(false);
   const [isRegeneratingBody, setIsRegeneratingBody] = useState(false);
   const [isRegeneratingCover, setIsRegeneratingCover] = useState(false);
+  const [rewritingIndex, setRewritingIndex] = useState<number | null>(null); // New: Track which paragraph is rewriting
   
   // Ask AI State
   const [askQuestion, setAskQuestion] = useState('');
@@ -281,16 +282,14 @@ const App: React.FC = () => {
       setIsRegeneratingBody(false);
   };
 
-  const onRegenerateParagraph = async (paragraph: string) => {
+  const onRegenerateParagraph = async (paragraph: string, index: number) => {
       if (!userApiKey) { setIsKeyModalOpen(true); return; }
-      // Find paragraph index to replace? Or just rewrite passed text and user manually pastes.
-      // For simplicity, we'll just rewrite the specific chunk and let user copy/replace for now,
-      // or more complexly, we could try to replace in place.
-      // Let's update `editableBody` by replacing.
+      setRewritingIndex(index); // Start loader for this paragraph
       try {
           const newText = await rewriteContent(paragraph, selectedTone === 'imitate' ? imitateText : "", userApiKey);
           setEditableBody(prev => prev.replace(paragraph, newText));
       } catch(e) { alert("重写失败"); }
+      setRewritingIndex(null); // Stop loader
   };
 
   const onRegenerateCoverTitle = async () => {
@@ -535,7 +534,7 @@ const App: React.FC = () => {
                             <button onClick={() => setSelectedTone('emotional')} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${selectedTone === 'emotional' ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600'}`}>😭 情感共鸣</button>
                             <button onClick={() => setSelectedTone('professional')} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${selectedTone === 'professional' ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600'}`}>🎓 干货科普</button>
                             <button onClick={() => setSelectedTone('speed')} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${selectedTone === 'speed' ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600'}`}>⚡ 速递新闻</button>
-                            <button onClick={() => setSelectedTone('imitate')} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${selectedTone === 'imitate' ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-purple-600 border-purple-200'}`}>🤖 模仿爆款</button>
+                            <button onClick={() => setSelectedTone('imitate')} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${selectedTone === 'imitate' ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-purple-200'}`}>🤖 模仿爆款</button>
                         </div>
                         {selectedTone === 'imitate' && (
                             <textarea className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-purple-500 outline-none h-32 resize-none" placeholder="请在此粘贴您想模仿的【参考爆文】内容..." value={imitateText} onChange={(e) => setImitateText(e.target.value)} />
@@ -562,7 +561,7 @@ const App: React.FC = () => {
                                 )}
                             </Suspense>
                         </div>
-                        {/* ... Visual Controls (Same as before) ... */}
+                        {/* ... Visual Controls ... */}
                         <div className="space-y-4">
                              <div>
                                  <label className="text-xs font-bold text-gray-900 block mb-2 flex items-center gap-1"><ImageIcon size={12}/> 封面背景图</label>
@@ -596,7 +595,7 @@ const App: React.FC = () => {
                              <div>
                                 <label className="text-xs font-bold text-gray-900 block mb-2">设计风格</label>
                                 <div className="grid grid-cols-3 gap-2">
-                                    {['apple_note', 'canva_viral', 'card', 'memo', 'literature', 'subtitle', 'notification', 'receipt', 'polaroid', 'chat'].map((t) => (
+                                    {['apple_note', 'memo', 'literature', 'magazine', 'notification', 'receipt', 'polaroid', 'chat'].map((t) => (
                                         <button key={t} onClick={() => setSelectedTemplate(t as VisualTemplate)} className={`py-2 text-[9px] font-bold uppercase rounded border ${selectedTemplate === t ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-500 border-gray-100'}`}>{t.replace('_',' ')}</button>
                                     ))}
                                 </div>
@@ -648,18 +647,26 @@ const App: React.FC = () => {
                              </div>
                              <div className="flex-1 relative">
                                  <label className="text-xs font-bold text-gray-400 uppercase block mb-2">正文内容 (悬停段落可重写)</label>
-                                 {/* Improved Text Editor with Paragraph Hover */}
+                                 {/* Improved Text Editor with Paragraph Hover and Loading State */}
                                  <div className="w-full text-lg leading-8 text-gray-800 min-h-[300px] outline-none" contentEditable suppressContentEditableWarning onBlur={e => setEditableBody(e.currentTarget.innerText)}>
                                      {bodyParagraphs.map((para, i) => (
                                          <div key={i} className="relative group mb-4 hover:bg-gray-50 rounded-lg p-1 -ml-1 transition-colors">
-                                             <p>{para}</p>
-                                             <button 
-                                                onClick={() => onRegenerateParagraph(para)}
-                                                className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 transition-opacity bg-white shadow-sm border border-gray-200 rounded p-1 text-purple-600 hover:text-purple-800"
-                                                title="重写此段"
-                                             >
-                                                 <RefreshCw size={12}/>
-                                             </button>
+                                             {rewritingIndex === i ? (
+                                                 <div className="flex items-center gap-2 text-purple-600 animate-pulse p-2 bg-purple-50 rounded">
+                                                     <Loader2 size={16} className="animate-spin"/> 正在重写段落...
+                                                 </div>
+                                             ) : (
+                                                 <>
+                                                     <p>{para}</p>
+                                                     <button 
+                                                        onClick={() => onRegenerateParagraph(para, i)}
+                                                        className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 transition-opacity bg-white shadow-sm border border-gray-200 rounded p-1 text-purple-600 hover:text-purple-800"
+                                                        title="重写此段"
+                                                     >
+                                                         <RefreshCw size={12}/>
+                                                     </button>
+                                                 </>
+                                             )}
                                          </div>
                                      ))}
                                  </div>

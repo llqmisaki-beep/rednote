@@ -10,7 +10,6 @@ interface VisualCardProps {
   coverFontSize?: number;
 }
 
-// Wrapped in React.memo for performance optimization
 export const VisualCard: React.FC<VisualCardProps> = React.memo(({ 
     data, 
     backgroundImage, 
@@ -24,6 +23,7 @@ export const VisualCard: React.FC<VisualCardProps> = React.memo(({
 
   const template = templateRecommendation as VisualTemplate;
   const coverMain = coverTextOverride !== undefined ? coverTextOverride : (elements?.coverText?.main || "标题");
+  // Treat empty string as null to hide elements
   const coverSub = (coverSubOverride !== undefined ? coverSubOverride : (elements?.coverText?.sub || "")).trim();
   const points = elements?.knowledgePoints || [];
 
@@ -42,7 +42,7 @@ export const VisualCard: React.FC<VisualCardProps> = React.memo(({
                     src={backgroundImage} 
                     alt="cover" 
                     className="w-full h-full object-cover" 
-                    loading="lazy" // Lazy load image
+                    loading="lazy" 
                 />
             </div>
           </>
@@ -258,5 +258,6 @@ export const VisualCard: React.FC<VisualCardProps> = React.memo(({
     );
   }
 
-  return null; 
+  // Fallback for unknown/removed templates
+  return <div className={containerClass + " flex items-center justify-center p-4"}>Select a style</div>; 
 });

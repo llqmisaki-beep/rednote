@@ -1,6 +1,5 @@
 export type InputType = 'Type A' | 'Type B' | 'Type C';
 
-// Removed 'youtube'
 export type SearchSource = 'x' | 'google';
 
 export type RednoteTone = 'emotional' | 'professional' | 'speed' | 'imitate' | 'humorous';
@@ -51,6 +50,7 @@ export interface VisualElement {
   } | null;
 }
 
+// Removed 'canva_viral', 'card', 'subtitle' as requested
 export type VisualTemplate = 
   | 'apple_note' 
   | 'memo' 
