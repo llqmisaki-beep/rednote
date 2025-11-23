@@ -1,4 +1,3 @@
-
 export type InputType = 'Type A' | 'Type B' | 'Type C';
 
 // Removed 'youtube'
@@ -20,6 +19,11 @@ export interface VideoFrame {
   id: string;
   url: string; // Data URL
   timestamp: number;
+}
+
+export interface MediaAnalysis {
+  summary: string;
+  corePoints: string[];
 }
 
 export interface RednoteContent {

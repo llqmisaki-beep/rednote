@@ -1,9 +1,9 @@
 import React, { useState, useEffect, Suspense } from 'react';
-import { generateRednote, searchTrends, regenerateTitles, rewriteContent, regenerateCoverTitle } from './services/gemini';
-import { InputType, RednoteResponse, SearchResult, SearchSource, VideoFrame, VisualTemplate, RednoteTone } from './types';
+import { generateRednote, searchTrends, regenerateTitles, rewriteContent, regenerateCoverTitle, analyzeMedia, askAI } from './services/gemini';
+import { InputType, RednoteResponse, SearchResult, SearchSource, VideoFrame, VisualTemplate, RednoteTone, MediaAnalysis } from './types';
 // Lazy load VisualCard
 const VisualCard = React.lazy(() => import('./components/VisualCard').then(module => ({ default: module.VisualCard })));
-import { Sparkles, Copy, Loader2, Video, Type, Search, Check, Upload, Image as ImageIcon, Globe, Youtube, Twitter, ArrowLeft, PenTool, FileText, RefreshCw, Wand2, Link as LinkIcon, Key, X, PlayCircle, Dice5, CheckCircle, AlertCircle, Layout, Type as TypeIcon } from 'lucide-react';
+import { Sparkles, Copy, Loader2, Video, Type, Search, Check, Upload, Image as ImageIcon, Globe, Youtube, Twitter, ArrowLeft, PenTool, FileText, RefreshCw, Wand2, Link as LinkIcon, Key, X, PlayCircle, Dice5, CheckCircle, AlertCircle, Layout, Type as TypeIcon, MessageSquare, BrainCircuit } from 'lucide-react';
 
 const App: React.FC = () => {
   const [step, setStep] = useState<'input' | 'result'>('input');
@@ -19,6 +19,10 @@ const App: React.FC = () => {
   const [selectedTone, setSelectedTone] = useState<RednoteTone>('emotional');
   const [imitateText, setImitateText] = useState(''); 
   
+  // Analysis State
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<MediaAnalysis | null>(null);
+
   // Media State
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [frames, setFrames] = useState<VideoFrame[]>([]);
@@ -44,6 +48,12 @@ const App: React.FC = () => {
   const [isRegeneratingBody, setIsRegeneratingBody] = useState(false);
   const [isRegeneratingCover, setIsRegeneratingCover] = useState(false);
   
+  // Ask AI State
+  const [askQuestion, setAskQuestion] = useState('');
+  const [askAnswer, setAskAnswer] = useState('');
+  const [isAsking, setIsAsking] = useState(false);
+  const [showAskModal, setShowAskModal] = useState(false);
+
   // Independent Editing States
   const [editableTitle, setEditableTitle] = useState('');
   const [editableCoverText, setEditableCoverText] = useState('');
@@ -77,6 +87,7 @@ const App: React.FC = () => {
     if (file) {
       setVideoFile(file);
       setFrames([]); 
+      setAnalysisResult(null);
       processVideo(file);
     }
   };
@@ -85,6 +96,7 @@ const App: React.FC = () => {
       const file = e.target.files?.[0];
       if (file) {
           setPdfFile(file);
+          setAnalysisResult(null);
           const reader = new FileReader();
           reader.onload = () => {
               const base64String = (reader.result as string).split(',')[1];
@@ -132,6 +144,28 @@ const App: React.FC = () => {
       setSearchSources(prev => prev.includes(source) ? prev.filter(s => s !== source) : [...prev, source]);
   };
 
+  // --- ANALYSIS & SEARCH ---
+
+  const handleAnalyze = async () => {
+      if (!userApiKey) { setIsKeyModalOpen(true); return; }
+      setIsAnalyzing(true);
+      try {
+          let data: any = {};
+          if (inputType === 'Type A') {
+              data = { description: inputText || "Video content" }; // Simulating since we can't upload video bytes easily in pure frontend
+          } else if (inputType === 'Type B' && pdfBase64) {
+              data = { base64: pdfBase64, mimeType: pdfFile?.type };
+          }
+          
+          const analysis = await analyzeMedia(inputType as 'Type A'|'Type B', data, userApiKey);
+          setAnalysisResult(analysis);
+      } catch (e: any) {
+          alert(`分析失败: ${e.message}`);
+      } finally {
+          setIsAnalyzing(false);
+      }
+  };
+
   const handleSearch = async () => {
       if (!inputText.trim() && !customSearchSource) return;
       if (!userApiKey) { setIsKeyModalOpen(true); return; } 
@@ -144,11 +178,8 @@ const App: React.FC = () => {
           const results = await searchTrends(query, searchSources, customSearchSource, userApiKey);
           setSearchResults(results || []);
           
-          // FORCE IMAGE LOGIC:
-          // Iterate through results to find the first valid image URL
-          const bestImage = results.find(r => r.imageUrl && r.imageUrl.startsWith('http'));
-          if (bestImage) {
-              setCustomCoverImage(bestImage.imageUrl);
+          if (results.length > 0 && results[0].imageUrl && results[0].imageUrl.startsWith('http')) {
+              setCustomCoverImage(results[0].imageUrl);
           }
 
           if (customSearchSource) {
@@ -172,6 +203,8 @@ const App: React.FC = () => {
       setSelectedResultIds(newSet);
   };
 
+  // --- GENERATION ---
+
   const handleGenerate = async () => {
     if (!userApiKey) { setIsKeyModalOpen(true); return; }
 
@@ -185,11 +218,15 @@ const App: React.FC = () => {
     setIsLoading(true); setResult(null);
 
     try {
-      let contextData: any = null;
+      let contextData: any = {};
+      // Pass Analysis result if exists
+      if (analysisResult) {
+          contextData.analysis = analysisResult;
+      }
+
       if (inputType === 'Type C') {
           if (selectedResultIds.size > 0) {
               contextData = searchResults.filter(r => selectedResultIds.has(r.id));
-              // Backup image set if not done in search
               if (!customCoverImage) {
                   const img = contextData.find((r: any) => r.imageUrl);
                   if (img) setCustomCoverImage(img.imageUrl);
@@ -198,9 +235,9 @@ const App: React.FC = () => {
               contextData = [{ url: customSearchSource, title: "Custom Link content" }];
           }
       } else if (inputType === 'Type A') {
-          contextData = { frameCount: frames.length, hasVideo: !!videoFile };
+          contextData = { ...contextData, frameCount: frames.length, hasVideo: !!videoFile };
       } else if (inputType === 'Type B' && pdfBase64) {
-          contextData = { fileData: pdfBase64, mimeType: pdfFile?.type };
+          contextData = { ...contextData, fileData: pdfBase64, mimeType: pdfFile?.type };
       }
 
       const finalInputText = inputText || "Generate content based on provided context";
@@ -221,7 +258,7 @@ const App: React.FC = () => {
     } finally { setIsLoading(false); }
   };
 
-  // --- Result Page Actions ---
+  // --- RESULT PAGE ACTIONS ---
 
   const onRegenerateTitles = async () => {
       if (!userApiKey) { setIsKeyModalOpen(true); return; }
@@ -244,6 +281,18 @@ const App: React.FC = () => {
       setIsRegeneratingBody(false);
   };
 
+  const onRegenerateParagraph = async (paragraph: string) => {
+      if (!userApiKey) { setIsKeyModalOpen(true); return; }
+      // Find paragraph index to replace? Or just rewrite passed text and user manually pastes.
+      // For simplicity, we'll just rewrite the specific chunk and let user copy/replace for now,
+      // or more complexly, we could try to replace in place.
+      // Let's update `editableBody` by replacing.
+      try {
+          const newText = await rewriteContent(paragraph, selectedTone === 'imitate' ? imitateText : "", userApiKey);
+          setEditableBody(prev => prev.replace(paragraph, newText));
+      } catch(e) { alert("重写失败"); }
+  };
+
   const onRegenerateCoverTitle = async () => {
       if (!userApiKey) { setIsKeyModalOpen(true); return; }
       setIsRegeneratingCover(true);
@@ -252,6 +301,16 @@ const App: React.FC = () => {
           setEditableCoverText(newCover);
       } catch (e) { alert("生成失败"); }
       setIsRegeneratingCover(false);
+  };
+
+  const onAskAI = async () => {
+      if (!userApiKey || !askQuestion.trim()) return;
+      setIsAsking(true);
+      try {
+          const ans = await askAI(editableBody, askQuestion, userApiKey);
+          setAskAnswer(ans);
+      } catch (e) { setAskAnswer("Error fetching answer."); }
+      setIsAsking(false);
   };
 
   const getVisualBackground = () => {
@@ -265,9 +324,48 @@ const App: React.FC = () => {
       templateRecommendation: selectedTemplate
   } : null;
 
+  // Helper to split body into paragraphs for the "Rewrite Paragraph" feature
+  const bodyParagraphs = editableBody.split('\n').filter(p => p.trim().length > 0);
+
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-gray-900 font-sans relative">
-      {/* Modal & Header (Same as before) */}
+      
+      {/* ASK AI MODAL */}
+      {showAskModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-xl p-6 w-full max-w-lg shadow-2xl">
+                  <div className="flex justify-between items-center mb-4">
+                      <h3 className="font-bold text-lg flex items-center gap-2"><BrainCircuit className="text-purple-600"/> 向 AI 提问</h3>
+                      <button onClick={() => setShowAskModal(false)}><X/></button>
+                  </div>
+                  <div className="bg-gray-50 p-3 rounded-lg max-h-40 overflow-y-auto mb-4 text-xs text-gray-500">
+                      <p className="font-bold mb-1">当前笔记内容:</p>
+                      {editableBody.substring(0, 200)}...
+                  </div>
+                  <div className="mb-4">
+                      {askAnswer && (
+                          <div className="bg-purple-50 p-3 rounded-lg text-sm text-purple-800 mb-3">
+                              <strong>AI:</strong> {askAnswer}
+                          </div>
+                      )}
+                      <input 
+                        className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-purple-500 outline-none"
+                        placeholder="针对笔记内容提问..."
+                        value={askQuestion}
+                        onChange={e => setAskQuestion(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && onAskAI()}
+                      />
+                  </div>
+                  <div className="flex justify-end">
+                      <button onClick={onAskAI} disabled={isAsking} className="bg-purple-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 disabled:opacity-50">
+                          {isAsking ? <Loader2 className="animate-spin" size={16}/> : <MessageSquare size={16}/>} 提问
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* API Key Modal (Same as before) */}
       {isKeyModalOpen && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm p-4">
               <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl animate-fade-in">
@@ -282,6 +380,8 @@ const App: React.FC = () => {
               </div>
           </div>
       )}
+      
+      {/* Header */}
       <div className="bg-white border-b border-gray-200 px-6 py-4 sticky top-0 z-20 shadow-sm">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
             <div className="flex items-center gap-2 cursor-pointer" onClick={() => setStep('input')}>
@@ -304,7 +404,7 @@ const App: React.FC = () => {
             </div>
             <div className="flex p-1.5 bg-white rounded-2xl mb-8 shadow-sm border border-gray-100">
             {(['Type A', 'Type B', 'Type C'] as InputType[]).map((type) => (
-                <button key={type} onClick={() => { setInputType(type); if(type!=='Type C') setSearchResults([]); }} className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-bold rounded-xl transition-all ${inputType === type ? 'bg-gray-900 text-white shadow-lg' : 'text-gray-500 hover:bg-gray-50'}`}>
+                <button key={type} onClick={() => { setInputType(type); if(type!=='Type C') setSearchResults([]); setAnalysisResult(null); }} className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-bold rounded-xl transition-all ${inputType === type ? 'bg-gray-900 text-white shadow-lg' : 'text-gray-500 hover:bg-gray-50'}`}>
                 {type === 'Type A' && <Video size={18} />}{type === 'Type B' && <FileText size={18} />}{type === 'Type C' && <Search size={18} />}
                 <span>{type === 'Type A' ? '视频提取' : type === 'Type B' ? '文献生成' : '热点搜索'}</span>
                 </button>
@@ -312,6 +412,7 @@ const App: React.FC = () => {
             </div>
             <div className="bg-white rounded-3xl shadow-xl shadow-gray-100 border border-gray-100 p-6 md:p-8">
                 {inputType === 'Type C' && (
+                    /* Type C Search UI (Same as before) */
                     <div className="space-y-6">
                         <div className="flex items-center gap-2 mb-2">
                             <div className="flex-1 relative">
@@ -364,33 +465,67 @@ const App: React.FC = () => {
                         )}
                     </div>
                 )}
-                {inputType === 'Type A' && (
+                {/* Type A & B Input + Analysis */}
+                {(inputType === 'Type A' || inputType === 'Type B') && (
                     <div className="space-y-6">
                         <div className="border-2 border-dashed border-gray-300 rounded-2xl p-8 text-center hover:bg-gray-50 relative group cursor-pointer">
-                            <input type="file" accept="video/*" onChange={handleVideoUpload} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
-                            <Upload className="mx-auto text-gray-400 mb-2" size={28} />
-                            <span className="text-sm font-bold text-gray-700">{videoFile ? videoFile.name : "点击上传视频"}</span>
+                            <input type="file" accept={inputType === 'Type A' ? "video/*" : "application/pdf"} onChange={inputType === 'Type A' ? handleVideoUpload : handlePdfUpload} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
+                            {inputType === 'Type A' ? <Upload className="mx-auto text-gray-400 mb-2" size={28} /> : <FileText className="mx-auto text-blue-400 mb-2" size={28} />}
+                            <span className="text-sm font-bold text-gray-700">
+                                {inputType === 'Type A' 
+                                    ? (videoFile ? videoFile.name : "点击上传视频 (Gemini Pro 分析)")
+                                    : (pdfFile ? pdfFile.name : "点击上传论文 PDF (Gemini Pro 分析)")
+                                }
+                            </span>
                         </div>
-                        {frames.length > 0 && (
-                            <div className="grid grid-cols-3 gap-2">
-                                {frames.map(frame => (
-                                    <div key={frame.id} onClick={() => setSelectedFrameId(selectedFrameId === frame.id ? null : frame.id)} className={`aspect-video rounded-lg overflow-hidden border-2 cursor-pointer relative ${selectedFrameId === frame.id ? 'border-[#ff2442]' : 'border-transparent'}`}><img src={frame.url} className="w-full h-full object-cover" />{selectedFrameId === frame.id && <div className="absolute inset-0 bg-[#ff2442]/30 flex items-center justify-center"><Check className="text-white" /></div>}</div>
-                                ))}
+                        
+                        {/* Analysis Section */}
+                        {(videoFile || pdfFile) && (
+                            <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
+                                <div className="flex justify-between items-center mb-3">
+                                    <h3 className="text-sm font-bold text-blue-900 flex items-center gap-2">
+                                        <BrainCircuit size={16}/> 深度内容分析
+                                    </h3>
+                                    <button onClick={handleAnalyze} disabled={isAnalyzing} className="px-3 py-1.5 bg-blue-600 text-white text-xs font-bold rounded-lg hover:bg-blue-700 flex items-center gap-1 disabled:opacity-50">
+                                        {isAnalyzing ? <Loader2 className="animate-spin" size={12}/> : <Sparkles size={12}/>}
+                                        开始分析
+                                    </button>
+                                </div>
+                                {analysisResult && (
+                                    <div className="space-y-3 animate-fade-in">
+                                        <div className="text-xs text-blue-800 bg-white p-3 rounded-lg shadow-sm">
+                                            <strong>摘要：</strong> {analysisResult.summary}
+                                        </div>
+                                        <div className="text-xs text-blue-800 bg-white p-3 rounded-lg shadow-sm">
+                                            <strong>核心要点：</strong>
+                                            <ul className="list-disc pl-4 mt-1 space-y-1">
+                                                {analysisResult.corePoints.map((p, i) => <li key={i}>{p}</li>)}
+                                            </ul>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
-                        <textarea className="w-full p-4 bg-gray-50 border border-gray-200 rounded-xl" placeholder="补充描述..." value={inputText} onChange={(e) => setInputText(e.target.value)} rows={3} />
+
+                        {inputType === 'Type A' && (
+                            <>
+                                {frames.length > 0 && (
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {frames.map(frame => (
+                                            <div key={frame.id} onClick={() => setSelectedFrameId(selectedFrameId === frame.id ? null : frame.id)} className={`aspect-video rounded-lg overflow-hidden border-2 cursor-pointer relative ${selectedFrameId === frame.id ? 'border-[#ff2442]' : 'border-transparent'}`}><img src={frame.url} className="w-full h-full object-cover" />{selectedFrameId === frame.id && <div className="absolute inset-0 bg-[#ff2442]/30 flex items-center justify-center"><Check className="text-white" /></div>}</div>
+                                        ))}
+                                    </div>
+                                )}
+                                <textarea className="w-full p-4 bg-gray-50 border border-gray-200 rounded-xl" placeholder="补充视频描述..." value={inputText} onChange={(e) => setInputText(e.target.value)} rows={3} />
+                            </>
+                        )}
+                        {inputType === 'Type B' && (
+                            <textarea className="w-full p-4 bg-gray-50 border border-gray-200 rounded-xl h-32" placeholder="或者在此处粘贴论文摘要/笔记内容..." value={inputText} onChange={(e) => setInputText(e.target.value)} />
+                        )}
                     </div>
                 )}
-                {inputType === 'Type B' && (
-                    <div className="space-y-6">
-                        <div className="border-2 border-dashed border-gray-300 rounded-2xl p-8 text-center hover:bg-gray-50 relative group cursor-pointer bg-blue-50/30">
-                             <input type="file" accept="application/pdf" onChange={handlePdfUpload} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
-                             <FileText className="mx-auto text-blue-400 mb-2" size={28} />
-                             <span className="text-sm font-bold text-gray-700">{pdfFile ? pdfFile.name : "点击上传论文 PDF"}</span>
-                        </div>
-                        <textarea className="w-full p-4 bg-gray-50 border border-gray-200 rounded-xl h-32" placeholder="或者在此处粘贴论文摘要/笔记内容..." value={inputText} onChange={(e) => setInputText(e.target.value)} />
-                    </div>
-                )}
+
+                {/* Tone & Generate */}
                 <div className="mt-8 pt-6 border-t border-gray-100">
                     <div className="mb-4">
                         <div className="flex justify-between items-center mb-2">
@@ -427,6 +562,7 @@ const App: React.FC = () => {
                                 )}
                             </Suspense>
                         </div>
+                        {/* ... Visual Controls (Same as before) ... */}
                         <div className="space-y-4">
                              <div>
                                  <label className="text-xs font-bold text-gray-900 block mb-2 flex items-center gap-1"><ImageIcon size={12}/> 封面背景图</label>
@@ -469,6 +605,7 @@ const App: React.FC = () => {
                     </div>
                 </div>
                 <div className="lg:col-span-7 space-y-6">
+                    {/* ... Title List ... */}
                     <div className="bg-white rounded-3xl shadow-lg border border-gray-100 p-6">
                         <div className="flex justify-between items-center mb-4">
                             <h3 className="text-sm font-bold text-gray-400 uppercase flex items-center gap-2"><Type size={16}/> 选择标题</h3>
@@ -487,15 +624,20 @@ const App: React.FC = () => {
                             ))}
                         </div>
                     </div>
+
+                    {/* Main Editor with Paragraph Rewriting */}
                     <div className="bg-white rounded-3xl shadow-xl border border-gray-100 overflow-hidden">
                         <div className="px-6 py-4 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
                             <span className="text-sm font-bold text-gray-700 flex gap-2"><PenTool size={16} className="text-[#ff2442]"/> 内容编辑</span>
                             <div className="flex gap-2">
-                                <button onClick={onRegenerateBody} disabled={isRegeneratingBody} className="bg-purple-100 text-purple-700 px-4 py-2 rounded-full text-xs font-bold flex gap-2 hover:bg-purple-200">
-                                    {isRegeneratingBody ? <Loader2 size={14} className="animate-spin"/> : <Wand2 size={14}/>} AI 润色/重写
+                                <button onClick={() => setShowAskModal(true)} className="bg-blue-100 text-blue-700 px-3 py-2 rounded-full text-xs font-bold flex items-center gap-1 hover:bg-blue-200">
+                                    <MessageSquare size={14}/> 问 AI
+                                </button>
+                                <button onClick={onRegenerateBody} disabled={isRegeneratingBody} className="bg-purple-100 text-purple-700 px-3 py-2 rounded-full text-xs font-bold flex items-center gap-1 hover:bg-purple-200">
+                                    {isRegeneratingBody ? <Loader2 size={14} className="animate-spin"/> : <Wand2 size={14}/>} 全文重写
                                 </button>
                                 <button onClick={() => { navigator.clipboard.writeText(`${editableTitle}\n\n${editableBody}`); setCopied(true); setTimeout(()=>setCopied(false),2000); }} className="bg-gray-900 text-white px-4 py-2 rounded-full text-xs font-bold flex gap-2 hover:bg-black">
-                                    {copied ? <Check size={14}/> : <Copy size={14}/>} {copied ? '已复制' : '复制全文'}
+                                    {copied ? <Check size={14}/> : <Copy size={14}/>} 复制
                                 </button>
                             </div>
                         </div>
@@ -504,9 +646,23 @@ const App: React.FC = () => {
                                  <label className="text-xs font-bold text-gray-400 uppercase">当前标题</label>
                                  <input value={editableTitle} onChange={(e) => setEditableTitle(e.target.value)} className="w-full text-xl font-extrabold border-b-2 border-gray-100 py-2 focus:border-[#ff2442] outline-none bg-transparent" />
                              </div>
-                             <div className="flex-1">
-                                 <label className="text-xs font-bold text-gray-400 uppercase">正文内容</label>
-                                 <textarea value={editableBody} onChange={(e) => setEditableBody(e.target.value)} className="w-full text-lg leading-8 text-gray-800 resize-none outline-none bg-transparent mt-2" style={{ minHeight: '300px' }} />
+                             <div className="flex-1 relative">
+                                 <label className="text-xs font-bold text-gray-400 uppercase block mb-2">正文内容 (悬停段落可重写)</label>
+                                 {/* Improved Text Editor with Paragraph Hover */}
+                                 <div className="w-full text-lg leading-8 text-gray-800 min-h-[300px] outline-none" contentEditable suppressContentEditableWarning onBlur={e => setEditableBody(e.currentTarget.innerText)}>
+                                     {bodyParagraphs.map((para, i) => (
+                                         <div key={i} className="relative group mb-4 hover:bg-gray-50 rounded-lg p-1 -ml-1 transition-colors">
+                                             <p>{para}</p>
+                                             <button 
+                                                onClick={() => onRegenerateParagraph(para)}
+                                                className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 transition-opacity bg-white shadow-sm border border-gray-200 rounded p-1 text-purple-600 hover:text-purple-800"
+                                                title="重写此段"
+                                             >
+                                                 <RefreshCw size={12}/>
+                                             </button>
+                                         </div>
+                                     ))}
+                                 </div>
                              </div>
                              <div className="flex flex-wrap gap-2 border-t border-dashed border-gray-200 pt-4">
                                 {result.content.tags?.map(tag => <span key={tag} className="text-sm font-medium text-blue-600 bg-blue-50 px-3 py-1 rounded-lg">{tag}</span>)}

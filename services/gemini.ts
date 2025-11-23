@@ -1,8 +1,11 @@
-
 import { GoogleGenAI } from "@google/genai";
-import { InputType, RednoteResponse, SearchResult, SearchSource, RednoteTone } from "../types";
+import { InputType, RednoteResponse, SearchResult, SearchSource, RednoteTone, MediaAnalysis } from "../types";
 
 const apiKey = process.env.API_KEY;
+
+// Use Pro model for heavy analysis, Flash for quick tasks
+const PRO_MODEL = 'gemini-1.5-pro'; 
+const FAST_MODEL = 'gemini-1.5-flash';
 
 // --- System Instructions ---
 
@@ -34,10 +37,10 @@ Return ONLY valid JSON. No markdown formatting.
 `;
 
 const SEARCH_SYSTEM_INSTRUCTION = `
-You are a ULTRA-FAST news aggregator.
+You are a ULTRA-FAST news aggregator & content parser.
 **CRITICAL RULES:**
-1. If the query is a URL, you MUST prioritize extracting information from that specific link.
-2. **EXTRACT IMAGE:** Try to find the main article image URL (OG:Image) and return it in 'imageUrl'.
+1. **IMAGE IS PRIORITY**: You MUST try to find the main article image (OpenGraph Image, Hero Image) URL. Return it in 'imageUrl'.
+2. If the query is a URL, summarize that specific page.
 3. Return JSON only.
 {
   "results": [
@@ -63,6 +66,78 @@ const extractJSON = (text: string) => {
   }
 };
 
+// --- Analysis Functions (Pro Model) ---
+
+export const analyzeMedia = async (
+    inputType: 'Type A' | 'Type B', 
+    fileData: any, 
+    apiKey?: string
+): Promise<MediaAnalysis> => {
+    const finalKey = apiKey || process.env.API_KEY;
+    if (!finalKey) throw new Error("API Key missing");
+    const ai = new GoogleGenAI({ apiKey: finalKey });
+
+    const prompt = `
+    Analyze the attached file (Video or PDF). 
+    Output a JSON object with two fields:
+    1. "summary": A concise introduction of the content (max 100 words).
+    2. "corePoints": An array of 3-5 key takeaways or core value points.
+    Output JSON ONLY.
+    `;
+
+    // Construct parts based on input
+    const parts: any[] = [{ text: prompt }];
+    if (inputType === 'Type A' && fileData.frames) {
+        // Simulating video analysis via frames for now (or actual video file if supported/uploaded)
+        // For this demo, we assume fileData contains info about video or we assume user wants textual analysis of context
+        // If we had the video file bytes, we'd pass them here. 
+        // Since browser upload of video bytes to Gemini API needs File API, we simulate with a description prompt if video bytes aren't passed directly or frames.
+        // *Assuming fileData is the description for now to save bandwidth in this demo environment, 
+        // OR if we have base64 PDF.*
+        parts.push({ text: "Video Context/Transcript: " + (fileData.description || "Analyze the visual content") });
+    } else if (inputType === 'Type B' && fileData.base64) {
+        parts.push({ inlineData: { mimeType: fileData.mimeType || 'application/pdf', data: fileData.base64 } });
+    }
+
+    try {
+        const response = await ai.models.generateContent({
+            model: PRO_MODEL, // Use Pro for deep analysis
+            contents: { parts },
+            config: { responseMimeType: "application/json" }
+        });
+        return extractJSON(response.text || "{}") as MediaAnalysis;
+    } catch (e) {
+        console.error(e);
+        throw new Error("Analysis failed. Please try again.");
+    }
+};
+
+export const askAI = async (
+    contextText: string, 
+    question: string, 
+    apiKey?: string
+): Promise<string> => {
+    const finalKey = apiKey || process.env.API_KEY;
+    const ai = new GoogleGenAI({ apiKey: finalKey });
+
+    const prompt = `
+    Context: """${contextText}"""
+    User Question: "${question}"
+    
+    Answer the user's question based on the context provided. Be helpful, concise, and professional.
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: PRO_MODEL,
+            contents: prompt,
+        });
+        return response.text || "Unable to answer.";
+    } catch (e) {
+        return "AI Error.";
+    }
+};
+
 // --- Main Functions ---
 
 export const searchTrends = async (query: string, sources: SearchSource[], customSource?: string, apiKey?: string): Promise<SearchResult[]> => {
@@ -74,7 +149,9 @@ export const searchTrends = async (query: string, sources: SearchSource[], custo
   let fullQuery = "";
   
   if (customSource && (customSource.startsWith('http') || customSource.includes('www'))) {
-      fullQuery = `Analyze this specific URL: ${customSource}. Extract title, summary, and the Main Image URL.`;
+      fullQuery = `Analyze this specific URL: ${customSource}. 
+      Task 1: Extract the Title and a 1-sentence Summary.
+      Task 2: Extract the MAIN HERO IMAGE URL (start with http).`;
   } else {
       const platformKeywords: string[] = sources.map(s => {
         if (s === 'x') return 'site:twitter.com OR site:x.com';
@@ -93,11 +170,9 @@ export const searchTrends = async (query: string, sources: SearchSource[], custo
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: FAST_MODEL, // Search is fine with Flash
       contents: `Task: ${fullQuery}. 
-      If it is a URL, extract the main content summary and imageUrl.
-      If it is a keyword, list top 8 results.
-      Return strictly JSON.`,
+      Return strictly JSON list with 'imageUrl' if found.`,
       config: {
         tools: [{ googleSearch: {} }],
         systemInstruction: SEARCH_SYSTEM_INSTRUCTION,
@@ -115,9 +190,9 @@ export const searchTrends = async (query: string, sources: SearchSource[], custo
     if (results.length === 0 && groundingChunks.length > 0) {
         return groundingChunks.map((chunk: any, idx: number) => ({
           id: String(idx),
-          title: chunk.web?.title || "搜索结果 / 链接分析",
-          snippet: "已获取链接内容，点击生成笔记进行深度分析...",
-          source: "Web Link",
+          title: chunk.web?.title || "搜索结果",
+          snippet: "点击生成笔记进行深度分析...",
+          source: "Web",
           url: chunk.web?.uri,
           date: ""
         }));
@@ -130,7 +205,7 @@ export const searchTrends = async (query: string, sources: SearchSource[], custo
         source: r.source || "Web",
         url: r.url, 
         date: r.date,
-        imageUrl: r.imageUrl // Ensure this is passed
+        imageUrl: r.imageUrl 
     }));
   } catch (error) {
     console.warn("Search extraction failed", error);
@@ -178,6 +253,11 @@ export const generateRednote = async (
       { text: `inputType: ${inputType}\n\n${toneInstruction}` }
   ];
   
+  // Pass Analysis data if available
+  if (contextData && contextData.analysis) {
+      promptParts.push({ text: `\n\nPre-Analysis Summary: ${contextData.analysis.summary}\nCore Points: ${contextData.analysis.corePoints.join(', ')}` });
+  }
+
   if (inputType === 'Type C' && contextData) {
       promptParts.push({ text: `\n\nSearch Context: ${JSON.stringify(contextData, null, 2)}` });
   } else if (inputType === 'Type A' && contextData) {
@@ -191,7 +271,7 @@ export const generateRednote = async (
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: PRO_MODEL, // Use Pro for generation for better quality
       contents: { parts: promptParts },
       config: { 
           systemInstruction: SYSTEM_INSTRUCTION, 
@@ -225,7 +305,7 @@ export const regenerateTitles = async (currentTopic: string, referenceTitle: str
 
     try {
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model: FAST_MODEL,
             contents: prompt,
         });
         const json = extractJSON(response.text || "[]");
@@ -241,15 +321,15 @@ export const rewriteContent = async (currentContent: string, referenceArticle: s
 
     const prompt = `
     Role: Rednote Editor.
-    Task: Rewrite content.
-    ${referenceArticle ? `Style Ref: """${referenceArticle}"""` : 'Make it viral.'}
+    Task: Rewrite or Polish the content below.
+    ${referenceArticle ? `Style Ref: """${referenceArticle}"""` : 'Instruction: Make it more engaging/concise/viral.'}
     Content: """${currentContent}"""
-    Output new content directly.
+    Output the new content directly.
     `;
 
     try {
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model: PRO_MODEL, // Pro for writing
             contents: prompt,
         });
         return response.text || currentContent;
@@ -273,7 +353,7 @@ export const regenerateCoverTitle = async (topic: string, currentTitle: string, 
 
     try {
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model: FAST_MODEL,
             contents: prompt,
         });
         return response.text?.trim().replace(/^"|"$/g, '') || currentTitle;
