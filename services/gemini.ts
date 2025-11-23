@@ -4,10 +4,11 @@ import { InputType, RednoteResponse, SearchResult, SearchSource, RednoteTone, Me
 const apiKey = process.env.API_KEY;
 
 // --- Model Configuration ---
-// As requested: Use 'gemini-3-pro-preview' for deep analysis and generation.
+// STRICT REQUIREMENT: Use 'gemini-3-pro-preview' as the primary analysis model.
 const PRO_MODEL = 'gemini-3-pro-preview'; 
-// Use 'gemini-2.5-flash' for high-speed simple tasks (like search aggregation or simple title tweaks)
-const FAST_MODEL = 'gemini-2.5-flash';
+// Fallbacks in case the preview model is unstable or inaccessible for the key
+const FALLBACK_PRO = 'gemini-1.5-pro';
+const FAST_MODEL = 'gemini-2.5-flash'; // Or 1.5-flash if 2.5 is not available
 
 // --- System Instructions ---
 
@@ -76,7 +77,7 @@ const extractJSON = (text: string) => {
   }
 };
 
-// --- Analysis Functions (Pro Model) ---
+// --- Analysis Functions (Pro Model with Robust Fallback) ---
 
 export const analyzeMedia = async (
     inputType: 'Type A' | 'Type B', 
@@ -88,32 +89,56 @@ export const analyzeMedia = async (
     const ai = new GoogleGenAI({ apiKey: finalKey });
 
     const prompt = `
-    Analyze the attached file (Video or PDF). 
+    Analyze the attached file/content. 
     Output a JSON object with two fields:
     1. "summary": A concise introduction of the content (max 100 words).
     2. "corePoints": An array of 3-5 key takeaways or core value points.
     Output JSON ONLY.
     `;
 
-    // Construct parts based on input
     const parts: any[] = [{ text: prompt }];
-    if (inputType === 'Type A' && fileData.description) {
-        // Using description as context for video analysis in this demo
-        parts.push({ text: "Video Context/Transcript: " + fileData.description });
-    } else if (inputType === 'Type B' && fileData.base64) {
+    if (inputType === 'Type A') {
+        // Video context
+        const desc = fileData.description || "No description provided. Analyze general context.";
+        parts.push({ text: "Video Context/Transcript: " + desc });
+    } else if (inputType === 'Type B') {
+        // PDF Context
+        if (!fileData.base64) throw new Error("No PDF file data found.");
         parts.push({ inlineData: { mimeType: fileData.mimeType || 'application/pdf', data: fileData.base64 } });
     }
 
+    // Helper to try models in sequence
+    const tryGenerate = async (modelName: string) => {
+        console.log(`Attempting analysis with model: ${modelName}`);
+        try {
+            const response = await ai.models.generateContent({
+                model: modelName, 
+                contents: { parts },
+                config: { responseMimeType: "application/json" }
+            });
+            return extractJSON(response.text || "{}") as MediaAnalysis;
+        } catch (e: any) {
+            console.warn(`Model ${modelName} failed:`, e.message);
+            throw e;
+        }
+    };
+
+    // 1. Try Requested PRO_MODEL (gemini-3-pro-preview)
     try {
-        const response = await ai.models.generateContent({
-            model: PRO_MODEL, // Gemini 3 Pro for deep analysis
-            contents: { parts },
-            config: { responseMimeType: "application/json" }
-        });
-        return extractJSON(response.text || "{}") as MediaAnalysis;
-    } catch (e) {
-        console.error(e);
-        throw new Error("Analysis failed. Please try again.");
+        return await tryGenerate(PRO_MODEL);
+    } catch (e1) {
+        // 2. Fallback to Stable Pro
+        try {
+            return await tryGenerate(FALLBACK_PRO);
+        } catch (e2) {
+            // 3. Fallback to Flash
+            try {
+                return await tryGenerate(FAST_MODEL);
+            } catch (finalError: any) {
+                console.error("All analysis models failed:", finalError);
+                throw new Error(`Analysis failed completely. Please check your API Key permissions or file format. Details: ${finalError.message}`);
+            }
+        }
     }
 };
 
@@ -132,14 +157,19 @@ export const askAI = async (
     Answer the user's question based on the context provided. Be helpful, concise, and professional.
     `;
 
+    const tryAsk = async (model: string) => {
+        const response = await ai.models.generateContent({ model, contents: prompt });
+        return response.text || "No answer generated.";
+    };
+
     try {
-        const response = await ai.models.generateContent({
-            model: PRO_MODEL, // Gemini 3 Pro for reasoning
-            contents: prompt,
-        });
-        return response.text || "Unable to answer.";
-    } catch (e) {
-        return "AI Error.";
+        return await tryAsk(PRO_MODEL);
+    } catch {
+        try {
+            return await tryAsk(FALLBACK_PRO);
+        } catch {
+            return await tryAsk(FAST_MODEL);
+        }
     }
 };
 
@@ -274,26 +304,30 @@ export const generateRednote = async (
       if (tone !== 'imitate') promptParts.push({ text: `Topic: ${inputText}` });
   }
 
+  // Retry logic for generation
+  const tryGenerate = async (model: string) => {
+      const response = await ai.models.generateContent({
+          model: model,
+          contents: { parts: promptParts },
+          config: { systemInstruction: SYSTEM_INSTRUCTION },
+      });
+      const safeJson = extractJSON(response.text || "{}") as any;
+      if (!safeJson.content) safeJson.content = { title: "AI Note", fullText: response.text || "" };
+      if (!safeJson.content.fullText) safeJson.content.fullText = safeJson.content.body || "";
+      if (!Array.isArray(safeJson.content.titles_options)) safeJson.content.titles_options = [safeJson.content.title || "Title"];
+      if (!safeJson.visualData) safeJson.visualData = { elements: { coverText: { main: safeJson.content.title, sub: "" } } };
+      return safeJson as RednoteResponse;
+  };
+
   try {
-    const response = await ai.models.generateContent({
-      model: PRO_MODEL, // Gemini 3 Pro for best quality generation
-      contents: { parts: promptParts },
-      config: { 
-          systemInstruction: SYSTEM_INSTRUCTION, 
-      },
-    });
-
-    const safeJson = extractJSON(response.text || "{}") as any;
-    
-    if (!safeJson.content) safeJson.content = { title: "AI Note", fullText: response.text || "" };
-    if (!safeJson.content.fullText) safeJson.content.fullText = safeJson.content.body || "";
-    if (!Array.isArray(safeJson.content.titles_options)) safeJson.content.titles_options = [safeJson.content.title || "Title"];
-    if (!safeJson.visualData) safeJson.visualData = { elements: { coverText: { main: safeJson.content.title, sub: "" } } };
-
-    return safeJson as RednoteResponse;
-  } catch (error) {
-    console.error("Gemini API Error:", error);
-    throw error;
+      return await tryGenerate(PRO_MODEL);
+  } catch (e) {
+      console.warn("Pro generation failed, retrying with fallback...", e);
+      try {
+          return await tryGenerate(FALLBACK_PRO);
+      } catch {
+          return await tryGenerate(FAST_MODEL);
+      }
   }
 };
 
@@ -310,7 +344,7 @@ export const regenerateTitles = async (currentTopic: string, referenceTitle: str
 
     try {
         const response = await ai.models.generateContent({
-            model: FAST_MODEL, // Fast model for simple titles
+            model: FAST_MODEL, // Use fast model for simple list generation
             contents: prompt,
         });
         const json = extractJSON(response.text || "[]");
@@ -332,14 +366,18 @@ export const rewriteContent = async (currentContent: string, referenceArticle: s
     Output the new content directly.
     `;
 
-    try {
+    const tryRewrite = async (model: string) => {
         const response = await ai.models.generateContent({
-            model: PRO_MODEL, // Gemini 3 Pro for high quality writing
+            model: model,
             contents: prompt,
         });
         return response.text || currentContent;
-    } catch (e) {
-        return currentContent;
+    };
+
+    try {
+        return await tryRewrite(PRO_MODEL);
+    } catch {
+        try { return await tryRewrite(FALLBACK_PRO); } catch { return await tryRewrite(FAST_MODEL); }
     }
 };
 
@@ -358,7 +396,7 @@ export const regenerateCoverTitle = async (topic: string, currentTitle: string, 
 
     try {
         const response = await ai.models.generateContent({
-            model: FAST_MODEL, // Fast model is sufficient for short text
+            model: FAST_MODEL,
             contents: prompt,
         });
         return response.text?.trim().replace(/^"|"$/g, '') || currentTitle;
