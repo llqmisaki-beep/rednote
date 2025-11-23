@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { generateRednote, searchTrends, regenerateTitles, rewriteContent, regenerateCoverTitle } from './services/gemini';
 import { InputType, RednoteResponse, SearchResult, SearchSource, VideoFrame, VisualTemplate, RednoteTone } from './types';
-import { VisualCard } from './components/VisualCard';
+// Lazy load VisualCard
+const VisualCard = React.lazy(() => import('./components/VisualCard').then(module => ({ default: module.VisualCard })));
 import { Sparkles, Copy, Loader2, Video, Type, Search, Check, Upload, Image as ImageIcon, Globe, Youtube, Twitter, ArrowLeft, PenTool, FileText, RefreshCw, Wand2, Link as LinkIcon, Key, X, PlayCircle, Dice5, CheckCircle, AlertCircle, Layout, Type as TypeIcon } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -143,13 +144,11 @@ const App: React.FC = () => {
           const results = await searchTrends(query, searchSources, customSearchSource, userApiKey);
           setSearchResults(results || []);
           
-          // Force Image logic: Always take the first image if available
-          if (results.length > 0) {
-              // Check current results for an image
-              const foundImage = results.find(r => r.imageUrl && r.imageUrl.startsWith('http'));
-              if (foundImage) {
-                  setCustomCoverImage(foundImage.imageUrl);
-              }
+          // FORCE IMAGE LOGIC:
+          // Iterate through results to find the first valid image URL
+          const bestImage = results.find(r => r.imageUrl && r.imageUrl.startsWith('http'));
+          if (bestImage) {
+              setCustomCoverImage(bestImage.imageUrl);
           }
 
           if (customSearchSource) {
@@ -190,7 +189,7 @@ const App: React.FC = () => {
       if (inputType === 'Type C') {
           if (selectedResultIds.size > 0) {
               contextData = searchResults.filter(r => selectedResultIds.has(r.id));
-              // If not set by search, try again here
+              // Backup image set if not done in search
               if (!customCoverImage) {
                   const img = contextData.find((r: any) => r.imageUrl);
                   if (img) setCustomCoverImage(img.imageUrl);
@@ -422,9 +421,11 @@ const App: React.FC = () => {
                 <div className="lg:col-span-5 space-y-6">
                     <div className="bg-white p-6 rounded-3xl shadow-xl border border-gray-100 sticky top-24">
                         <div className="mb-6 transform hover:scale-[1.02] transition-transform">
-                            {visualDataForPreview && (
-                                <VisualCard data={visualDataForPreview} backgroundImage={getVisualBackground()} coverTextOverride={editableCoverText} coverSubOverride={editableCoverSub} coverFontSize={coverFontSize} />
-                            )}
+                            <Suspense fallback={<div className="aspect-[3/4] bg-gray-100 animate-pulse rounded-xl"/>}>
+                                {visualDataForPreview && (
+                                    <VisualCard data={visualDataForPreview} backgroundImage={getVisualBackground()} coverTextOverride={editableCoverText} coverSubOverride={editableCoverSub} coverFontSize={coverFontSize} />
+                                )}
+                            </Suspense>
                         </div>
                         <div className="space-y-4">
                              <div>

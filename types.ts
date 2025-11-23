@@ -1,3 +1,4 @@
+
 export type InputType = 'Type A' | 'Type B' | 'Type C';
 
 // Removed 'youtube'

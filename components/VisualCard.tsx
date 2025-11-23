@@ -6,11 +6,12 @@ interface VisualCardProps {
   data: VisualData;
   backgroundImage?: string | null;
   coverTextOverride?: string; 
-  coverSubOverride?: string; // New prop for subtitle editing
+  coverSubOverride?: string;
   coverFontSize?: number;
 }
 
-export const VisualCard: React.FC<VisualCardProps> = ({ 
+// Wrapped in React.memo for performance optimization
+export const VisualCard: React.FC<VisualCardProps> = React.memo(({ 
     data, 
     backgroundImage, 
     coverTextOverride, 
@@ -23,23 +24,26 @@ export const VisualCard: React.FC<VisualCardProps> = ({
 
   const template = templateRecommendation as VisualTemplate;
   const coverMain = coverTextOverride !== undefined ? coverTextOverride : (elements?.coverText?.main || "标题");
-  const coverSub = coverSubOverride !== undefined ? coverSubOverride : (elements?.coverText?.sub || "");
+  const coverSub = (coverSubOverride !== undefined ? coverSubOverride : (elements?.coverText?.sub || "")).trim();
   const points = elements?.knowledgePoints || [];
 
-  // Helper to apply font size scaling
   const getTitleStyle = (baseSizeRem: number) => ({
       fontSize: `${baseSizeRem * coverFontSize}rem`,
       lineHeight: 1.1
   });
 
-  // Common Image Layer
   const ImageLayer = ({ opacity = 1, filter = '' }: { opacity?: number, filter?: string }) => {
       if (!backgroundImage) return <div className="absolute inset-0 bg-gray-100 flex items-center justify-center text-gray-300 font-bold text-2xl">NO IMAGE</div>;
       return (
           <>
             <div className="absolute inset-0 bg-cover bg-center blur-xl scale-110" style={{ backgroundImage: `url(${backgroundImage})`, opacity: opacity }} />
             <div className={`absolute inset-0 flex items-center justify-center ${filter}`}>
-                <img src={backgroundImage} alt="cover" className="w-full h-full object-cover" />
+                <img 
+                    src={backgroundImage} 
+                    alt="cover" 
+                    className="w-full h-full object-cover" 
+                    loading="lazy" // Lazy load image
+                />
             </div>
           </>
       );
@@ -255,4 +259,4 @@ export const VisualCard: React.FC<VisualCardProps> = ({
   }
 
   return null; 
-};
+});

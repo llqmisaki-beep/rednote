@@ -1,3 +1,4 @@
+
 import { GoogleGenAI } from "@google/genai";
 import { InputType, RednoteResponse, SearchResult, SearchSource, RednoteTone } from "../types";
 
@@ -129,7 +130,7 @@ export const searchTrends = async (query: string, sources: SearchSource[], custo
         source: r.source || "Web",
         url: r.url, 
         date: r.date,
-        imageUrl: r.imageUrl
+        imageUrl: r.imageUrl // Ensure this is passed
     }));
   } catch (error) {
     console.warn("Search extraction failed", error);
@@ -153,23 +154,23 @@ export const generateRednote = async (
   let toneInstruction = "";
   
   if (tone === 'imitate') {
-      const referenceText = customRequirement || "No reference provided, use generic viral style.";
+      const referenceText = customRequirement || "No reference provided.";
       toneInstruction = `
       # Role: 小红书爆款拆解与重构专家
-      ## Reference Viral Text:
+      ## Reference Style (Mimic Tone & Structure):
       """${referenceText}"""
       ## My Topic:
       "${inputText}"
       ## Output:
       1. 5 Viral Titles.
-      2. Content mimicking the reference style exactly.
+      2. Content mimicking the reference style.
       `;
   } else {
       switch (tone) {
-          case 'emotional': toneInstruction = "Tone: Emotional Resonance."; break;
-          case 'professional': toneInstruction = "Tone: Professional Science."; break;
-          case 'speed': toneInstruction = "Tone: News Speed."; break;
-          case 'humorous': toneInstruction = "Tone: Humorous/Sarcastic."; break;
+          case 'emotional': toneInstruction = "Tone: Emotional, Empathetic (家人们)."; break;
+          case 'professional': toneInstruction = "Tone: Professional, Structured (干货)."; break;
+          case 'speed': toneInstruction = "Tone: News Flash, Urgent (速递)."; break;
+          case 'humorous': toneInstruction = "Tone: Humorous, Sarcastic."; break;
       }
   }
 
@@ -178,11 +179,11 @@ export const generateRednote = async (
   ];
   
   if (inputType === 'Type C' && contextData) {
-      promptParts.push({ text: `\n\nSelected Search/Link Context: ${JSON.stringify(contextData, null, 2)}` });
+      promptParts.push({ text: `\n\nSearch Context: ${JSON.stringify(contextData, null, 2)}` });
   } else if (inputType === 'Type A' && contextData) {
-       promptParts.push({ text: `\n\nVisual Context: ${contextData.frameCount} frames extracted from video.` });
+       promptParts.push({ text: `\n\nVisual Context: ${contextData.frameCount} video frames.` });
   } else if (inputType === 'Type B' && contextData && contextData.fileData) {
-      promptParts.push({ text: `\n\nAnalyze PDF content.` });
+      promptParts.push({ text: `\n\nAnalyze PDF.` });
       promptParts.push({ inlineData: { mimeType: contextData.mimeType || 'application/pdf', data: contextData.fileData } });
   } else {
       if (tone !== 'imitate') promptParts.push({ text: `Topic: ${inputText}` });
@@ -217,8 +218,8 @@ export const regenerateTitles = async (currentTopic: string, referenceTitle: str
 
     const prompt = `
     Task: Generate 5 NEW viral Xiaohongshu titles for: "${currentTopic}".
-    Constraint: Mimic style of: "${referenceTitle || 'High Click-Through Rate styles'}".
-    Format: Emoji + Keyword + Pain Point.
+    Mimic style: "${referenceTitle}".
+    Format: Emoji + Text.
     Output: JSON array of strings.
     `;
 
@@ -230,7 +231,7 @@ export const regenerateTitles = async (currentTopic: string, referenceTitle: str
         const json = extractJSON(response.text || "[]");
         return Array.isArray(json) ? json : (json.titles || []);
     } catch (e) {
-        return ["生成失败", "请重试"];
+        return ["生成失败"];
     }
 };
 
@@ -240,10 +241,10 @@ export const rewriteContent = async (currentContent: string, referenceArticle: s
 
     const prompt = `
     Role: Rednote Editor.
-    Task: Rewrite/Improve the content below.
-    ${referenceArticle ? `STYLE REFERENCE: """${referenceArticle}"""` : 'Instruction: Make it more viral.'}
-    CONTENT: """${currentContent}"""
-    Output the new content directly.
+    Task: Rewrite content.
+    ${referenceArticle ? `Style Ref: """${referenceArticle}"""` : 'Make it viral.'}
+    Content: """${currentContent}"""
+    Output new content directly.
     `;
 
     try {
@@ -257,22 +258,17 @@ export const rewriteContent = async (currentContent: string, referenceArticle: s
     }
 };
 
-// New Function for Cover Title
+// Cover Title Optimizer
 export const regenerateCoverTitle = async (topic: string, currentTitle: string, apiKey?: string): Promise<string> => {
     const finalKey = apiKey || process.env.API_KEY;
     const ai = new GoogleGenAI({ apiKey: finalKey });
 
     const prompt = `
-    Task: Generate ONE extremely visually impactful "Cover Title" (Big Text) for a Rednote cover image.
+    Task: Create 1 highly visual, punchy Cover Title (2-6 words) for a poster.
     Topic: "${topic}"
     Current: "${currentTitle}"
-    
-    Requirements:
-    1. Very short (2-6 words max).
-    2. High impact, clickbait, emotional or shocking.
-    3. Suitable for large poster text.
-    
-    Output: Just the text string.
+    Requirement: Short, Impactful, No Punctuation.
+    Output: Just the text.
     `;
 
     try {
