@@ -252,3 +252,13 @@ export const regenerateCoverTitle = async (topic: string, curr: string, key?: st
     });
     return response.text || curr;
 };
+
+export const askAI = async (context: string, question: string, key?: string) => {
+    const finalKey = key || process.env.API_KEY;
+    const ai = new GoogleGenAI({ apiKey: finalKey });
+    const response = await ai.models.generateContent({
+        model: PRO_MODEL,
+        contents: `Context: ${context}\nQuestion: ${question}\nAnswer concisely.`,
+    });
+    return response.text || "No answer";
+};

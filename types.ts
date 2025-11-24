@@ -54,12 +54,9 @@ export interface VisualElement {
 
 export type VisualTemplate = 
   | 'apple_note' 
-  | 'memo' 
   | 'literature' 
   | 'magazine' 
   | 'notification'
-  | 'receipt'
-  | 'polaroid'
   | 'chat';
 
 export interface VisualData {

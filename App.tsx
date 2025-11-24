@@ -12,7 +12,7 @@ const App: React.FC = () => {
   const [userApiKey, setUserApiKey] = useState('');
   const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
   const [tempKey, setTempKey] = useState('');
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Mobile Sidebar State
 
   // Input State
   const [inputType, setInputType] = useState<InputType>('Type A');
