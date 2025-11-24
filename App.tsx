@@ -331,7 +331,7 @@ const App: React.FC = () => {
       setEditablePoints(newPoints);
   };
 
-  const addPoint = () => setEditablePoints([...editablePoints, "新知识点"]);
+  const addPoint = () => setEditablePoints([...editablePoints, "新亮点"]);
   const removePoint = (idx: number) => setEditablePoints(editablePoints.filter((_, i) => i !== idx));
 
   const getVisualBackground = () => {
@@ -406,7 +406,7 @@ const App: React.FC = () => {
           </div>
       )}
 
-      {/* API Key Modal */}
+      {/* API Key Modal (Same as before) */}
       {isKeyModalOpen && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm p-4">
               <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl animate-fade-in">
@@ -659,15 +659,11 @@ const App: React.FC = () => {
                                     <label className="text-xs text-gray-400">知识点 / 列表内容</label>
                                     {editablePoints.map((p, idx) => (
                                         <div key={idx} className="flex gap-1">
-                                            <input value={p} onChange={(e) => {
-                                                const newPoints = [...editablePoints];
-                                                newPoints[idx] = e.target.value;
-                                                setEditablePoints(newPoints);
-                                            }} className="flex-1 p-2 bg-gray-50 border border-gray-200 rounded-lg text-xs outline-none focus:border-[#ff2442]" />
-                                            <button onClick={() => setEditablePoints(editablePoints.filter((_, i) => i !== idx))} className="p-2 text-gray-400 hover:text-red-500"><Trash2 size={14}/></button>
+                                            <input value={p} onChange={(e) => updatePoint(idx, e.target.value)} className="flex-1 p-2 bg-gray-50 border border-gray-200 rounded-lg text-xs outline-none focus:border-[#ff2442]" />
+                                            <button onClick={() => removePoint(idx)} className="p-2 text-gray-400 hover:text-red-500"><Trash2 size={14}/></button>
                                         </div>
                                     ))}
-                                    <button onClick={() => setEditablePoints([...editablePoints, "新亮点"])} className="w-full py-2 border border-dashed border-gray-300 rounded-lg text-xs text-gray-500 hover:bg-gray-50 flex items-center justify-center gap-1"><Plus size={12}/> 添加行</button>
+                                    <button onClick={addPoint} className="w-full py-2 border border-dashed border-gray-300 rounded-lg text-xs text-gray-500 hover:bg-gray-50 flex items-center justify-center gap-1"><Plus size={12}/> 添加行</button>
                                 </div>
                              </div>
                              <div>
@@ -722,6 +718,7 @@ const App: React.FC = () => {
                              </div>
                              <div className="flex-1 relative">
                                  <label className="text-xs font-bold text-gray-400 uppercase block mb-2">正文内容 (悬停段落可重写)</label>
+                                 {/* Improved Text Editor with Paragraph Hover and Loading State */}
                                  <div className="w-full text-lg leading-8 text-gray-800 min-h-[300px] outline-none" contentEditable suppressContentEditableWarning onBlur={e => setEditableBody(e.currentTarget.innerText)}>
                                      {bodyParagraphs.map((para, i) => (
                                          <div key={i} className="relative group mb-4 hover:bg-gray-50 rounded-lg p-1 -ml-1 transition-colors">
