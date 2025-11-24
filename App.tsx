@@ -3,7 +3,7 @@ import { generateRednote, searchTrends, regenerateTitles, rewriteContent, regene
 import { InputType, RednoteResponse, SearchResult, SearchSource, VideoFrame, VisualTemplate, RednoteTone, MediaAnalysis } from './types';
 // Lazy load VisualCard
 const VisualCard = React.lazy(() => import('./components/VisualCard').then(module => ({ default: module.VisualCard })));
-import { Sparkles, Copy, Loader2, Video, Type, Search, Check, Upload, Image as ImageIcon, Globe, Youtube, Twitter, ArrowLeft, PenTool, FileText, RefreshCw, Wand2, Link as LinkIcon, Key, X, PlayCircle, Dice5, CheckCircle, AlertCircle, Layout, Type as TypeIcon, MessageSquare, BrainCircuit, Plus, Trash2, Zap, BarChart2, User, Settings } from 'lucide-react';
+import { Sparkles, Copy, Loader2, Video, Type, Search, Check, Upload, Image as ImageIcon, Globe, Youtube, Twitter, ArrowLeft, PenTool, FileText, RefreshCw, Wand2, Link as LinkIcon, Key, X, PlayCircle, Dice5, CheckCircle, AlertCircle, Layout, Type as TypeIcon, MessageSquare, BrainCircuit, Plus, Trash2, Zap, BarChart2, User, Settings, Menu } from 'lucide-react';
 
 const App: React.FC = () => {
   const [step, setStep] = useState<'input' | 'result'>('input');
@@ -12,6 +12,7 @@ const App: React.FC = () => {
   const [userApiKey, setUserApiKey] = useState('');
   const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
   const [tempKey, setTempKey] = useState('');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Mobile Sidebar State
 
   // Input State
   const [inputType, setInputType] = useState<InputType>('Type A');
@@ -229,7 +230,6 @@ const App: React.FC = () => {
 
     try {
       let contextData: any = {};
-      // Pass Analysis result if exists
       if (analysisResult) {
           contextData.analysis = analysisResult;
       }
@@ -265,13 +265,15 @@ const App: React.FC = () => {
       setSelectedTemplate(data.visualData.templateRecommendation as VisualTemplate);
       
       setStep('result'); window.scrollTo(0, 0);
+  
+      // Close sidebar on mobile after generation
+      setIsSidebarOpen(false);
     } catch (error: any) {
       console.error(error); 
       alert(`生成失败: ${error.message}`);
     } finally { setIsLoading(false); }
   };
 
-  // --- RESULT PAGE ACTIONS ---
   const onRegenerateTitles = async () => { if(!userApiKey){setIsKeyModalOpen(true);return} setIsRegeneratingTitle(true); try{ const t=await regenerateTitles(inputText||"Idea",editableTitle,userApiKey); if(result)setResult({...result,content:{...result.content,titles_options:t}}); }catch(e){alert("Failed")} setIsRegeneratingTitle(false); };
   const onRegenerateBody = async () => { if(!userApiKey){setIsKeyModalOpen(true);return} setIsRegeneratingBody(true); try{ const b=await rewriteContent(editableBody,selectedTone==='imitate'?imitateText:"",rewriteInstruction,userApiKey); setEditableBody(b); }catch(e){alert("Failed")} setIsRegeneratingBody(false); setShowRewriteModal(false); };
   const onRegenerateParagraph = async (p:string, i:number) => { if(!userApiKey){setIsKeyModalOpen(true);return} setRewritingIndex(i); try{ const t=await rewriteContent(p,selectedTone==='imitate'?imitateText:"","",userApiKey); setEditableBody(prev=>prev.replace(p,t)); }catch(e){alert("Failed")} setRewritingIndex(null); };
@@ -292,7 +294,7 @@ const App: React.FC = () => {
 
   const NavButton = ({ type, label, icon: Icon }: {type: InputType, label: string, icon: any}) => (
       <button 
-        onClick={() => {setStep('input'); setInputType(type);}} 
+        onClick={() => {setStep('input'); setInputType(type); setIsSidebarOpen(false);}} 
         className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${isActive(type) ? 'bg-white/10 text-white shadow-lg border border-white/10 backdrop-blur-md' : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'}`}
       >
           <Icon size={18} className={isActive(type) ? 'text-[#D9F99D]' : ''} /> 
@@ -303,8 +305,8 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen font-sans text-gray-200 flex overflow-hidden bg-[#0F1115]">
       
-      {/* --- SIDEBAR --- */}
-      <aside className="w-64 h-screen flex flex-col border-r border-white/5 glass-panel z-10">
+      {/* --- SIDEBAR (Desktop) --- */}
+      <aside className="w-64 h-screen flex-col border-r border-white/5 glass-panel z-30 hidden md:flex">
           <div className="p-8 flex items-center gap-3 mb-4">
               <div className="w-8 h-8 bg-gradient-to-br from-[#D9F99D] to-[#A7F3D0] rounded-lg flex items-center justify-center text-black font-bold text-xl shadow-lg shadow-green-900/20">R</div>
               <h1 className="text-lg font-medium tracking-wide text-white/90">Rednote AI</h1>
@@ -333,27 +335,57 @@ const App: React.FC = () => {
           </div>
       </aside>
 
+      {/* --- MOBILE SIDEBAR OVERLAY --- */}
+      {isSidebarOpen && (
+        <div className="fixed inset-0 z-40 md:hidden">
+            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setIsSidebarOpen(false)}></div>
+            <aside className="absolute left-0 top-0 h-full w-64 bg-[#151921] border-r border-white/10 shadow-2xl flex flex-col z-50 animate-fade-in-up">
+                <div className="p-6 flex items-center justify-between border-b border-white/5">
+                    <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 bg-gradient-to-br from-[#D9F99D] to-[#A7F3D0] rounded-lg flex items-center justify-center text-black font-bold text-xl">R</div>
+                        <h1 className="text-lg font-medium tracking-wide text-white">Rednote AI</h1>
+                    </div>
+                    <button onClick={() => setIsSidebarOpen(false)} className="text-gray-400"><X size={20}/></button>
+                </div>
+                <nav className="flex-1 px-4 py-6 space-y-2">
+                    <NavButton type="Type A" label="视频分析" icon={Video} />
+                    <NavButton type="Type B" label="文献生成" icon={FileText} />
+                    <NavButton type="Type C" label="热点搜索" icon={Search} />
+                    <div className="h-px bg-white/5 my-4"></div>
+                    <button onClick={() => {setIsKeyModalOpen(true); setIsSidebarOpen(false)}} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-gray-400 hover:text-white">
+                        <Key size={18}/> <span>API 密钥</span>
+                    </button>
+                </nav>
+            </aside>
+        </div>
+      )}
+
       {/* --- MAIN CONTENT --- */}
       <main className="flex-1 h-screen overflow-y-auto relative scroll-smooth bg-gradient-to-br from-[#0F1115] to-[#13161c]">
         
         {/* Top Bar */}
-        <header className="sticky top-0 z-20 px-8 py-6 flex justify-between items-center glass-panel border-b border-white/5 bg-[#0F1115]/80">
-            <div>
-                <h2 className="text-xl font-light tracking-wide text-white">{step === 'input' ? '仪表盘' : '创作工作室'}</h2>
-                <p className="text-xs text-gray-500 font-mono mt-1">AI 爆款内容创作引擎 v2.0</p>
+        <header className="sticky top-0 z-20 px-4 md:px-8 py-4 md:py-6 flex justify-between items-center glass-panel border-b border-white/5 bg-[#0F1115]/80">
+            <div className="flex items-center gap-3">
+                <button className="md:hidden text-gray-400 hover:text-white" onClick={() => setIsSidebarOpen(true)}>
+                    <Menu size={24} />
+                </button>
+                <div>
+                    <h2 className="text-lg md:text-xl font-light tracking-wide text-white">{step === 'input' ? '仪表盘' : '创作工作室'}</h2>
+                    <p className="text-[10px] md:text-xs text-gray-500 font-mono mt-0.5 hidden sm:block">AI 爆款内容创作引擎 v2.0</p>
+                </div>
             </div>
             <div className="flex gap-3">
                 {step === 'result' && (
-                    <button onClick={() => setStep('input')} className="glass-button px-4 py-2 rounded-lg text-xs font-bold text-gray-300 flex items-center gap-2 hover:text-white">
-                        <ArrowLeft size={14}/> 返回
+                    <button onClick={() => setStep('input')} className="glass-button px-3 py-1.5 rounded-lg text-xs font-bold text-gray-300 flex items-center gap-2 hover:text-white">
+                        <ArrowLeft size={14}/> <span className="hidden sm:inline">返回</span>
                     </button>
                 )}
-                <div className="w-10 h-10 rounded-full glass-button flex items-center justify-center text-gray-400 hover:text-white cursor-pointer"><Settings size={16}/></div>
+                <div className="w-8 h-8 md:w-10 md:h-10 rounded-full glass-button flex items-center justify-center text-gray-400 hover:text-white cursor-pointer"><Settings size={16}/></div>
             </div>
         </header>
 
         {/* CONTENT AREA */}
-        <div className="px-8 py-8 pb-24 max-w-7xl mx-auto">
+        <div className="px-4 md:px-8 py-6 md:py-8 pb-24 max-w-7xl mx-auto">
             
             {/* === INPUT STEP === */}
             {step === 'input' && (
@@ -363,13 +395,13 @@ const App: React.FC = () => {
                     <div className="xl:col-span-2 space-y-6">
                         
                         {/* Welcome Banner */}
-                        <div className="glass-panel rounded-3xl p-8 relative overflow-hidden group">
+                        <div className="glass-panel rounded-3xl p-6 md:p-8 relative overflow-hidden group">
                             <div className="absolute top-0 right-0 w-64 h-64 bg-[#D9F99D] blur-[100px] opacity-10 rounded-full group-hover:opacity-20 transition-opacity duration-700"></div>
                             <div className="relative z-10 flex justify-between items-end">
-                                <div>
-                                    <h3 className="text-2xl font-light text-white mb-2 tracking-tight">开始创作</h3>
-                                    <p className="text-gray-400 text-sm max-w-md font-light">使用 Gemini 3 Pro Preview 进行深度分析和爆款内容生成。</p>
-                                    <button onClick={handleGenerate} disabled={isLoading} className="mt-8 bg-[#D9F99D] text-black px-6 py-3 rounded-xl font-bold text-xs tracking-wide flex items-center gap-2 hover:shadow-[0_0_20px_rgba(217,249,157,0.4)] transition-all disabled:opacity-50 disabled:cursor-not-allowed uppercase">
+                                <div className="w-full">
+                                    <h3 className="text-xl md:text-2xl font-light text-white mb-2 tracking-tight">开始创作</h3>
+                                    <p className="text-gray-400 text-xs md:text-sm max-w-md font-light">使用 Gemini 3 Pro Preview 进行深度分析和爆款内容生成。</p>
+                                    <button onClick={handleGenerate} disabled={isLoading} className="mt-6 md:mt-8 bg-[#D9F99D] text-black w-full md:w-auto px-6 py-3 rounded-xl font-bold text-xs tracking-wide flex items-center justify-center gap-2 hover:shadow-[0_0_20px_rgba(217,249,157,0.4)] transition-all disabled:opacity-50 disabled:cursor-not-allowed uppercase">
                                         {isLoading ? <Loader2 className="animate-spin" size={16}/> : <Sparkles size={16}/>}
                                         生成爆款笔记
                                     </button>
@@ -381,8 +413,8 @@ const App: React.FC = () => {
                         </div>
 
                         {/* Input Widget */}
-                        <div className="glass-panel rounded-3xl p-8">
-                             <div className="flex justify-between items-center mb-8 border-b border-white/5 pb-4">
+                        <div className="glass-panel rounded-3xl p-6 md:p-8">
+                             <div className="flex justify-between items-center mb-6 md:mb-8 border-b border-white/5 pb-4">
                                  <h3 className="text-sm font-bold text-gray-300 uppercase tracking-widest flex items-center gap-2">
                                      {inputType === 'Type A' ? <Video size={16} className="text-purple-400"/> : inputType === 'Type B' ? <FileText size={16} className="text-blue-400"/> : <Search size={16} className="text-green-400"/>}
                                      {inputType === 'Type A' ? '视频来源' : inputType === 'Type B' ? '文档来源' : '话题搜索'}
@@ -398,20 +430,20 @@ const App: React.FC = () => {
                                              <LinkIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
                                              <input 
                                                  className="w-full pl-11 pr-4 py-4 glass-input rounded-xl text-sm font-light placeholder-gray-600"
-                                                 placeholder="粘贴视频链接 (B站/YouTube) 进行深度分析..."
+                                                 placeholder="粘贴视频链接 (B站/YouTube)..."
                                                  value={videoUrlInput}
                                                  onChange={(e) => setVideoUrlInput(e.target.value)}
                                              />
                                          </div>
-                                         <div className="relative group">
+                                         <div className="relative group h-12 sm:h-auto">
                                              <input type="file" accept="video/*" onChange={handleVideoUpload} className="absolute inset-0 opacity-0 cursor-pointer w-full h-full z-10" />
-                                             <button className="h-full px-6 glass-button rounded-xl font-bold text-xs text-gray-300 hover:text-white flex items-center gap-2 whitespace-nowrap">
+                                             <button className="w-full h-full px-6 glass-button rounded-xl font-bold text-xs text-gray-300 hover:text-white flex items-center justify-center gap-2 whitespace-nowrap">
                                                  <Upload size={16}/> 上传文件
                                              </button>
                                          </div>
                                      </div>
                                      {frames.length > 0 && (
-                                         <div className="grid grid-cols-6 gap-2 pt-2">
+                                         <div className="grid grid-cols-4 sm:grid-cols-6 gap-2 pt-2">
                                              {frames.map(frame => (
                                                  <div key={frame.id} onClick={() => setSelectedFrameId(selectedFrameId === frame.id ? null : frame.id)} className={`aspect-video rounded-lg overflow-hidden cursor-pointer relative transition-all border ${selectedFrameId === frame.id ? 'border-[#D9F99D] shadow-[0_0_10px_rgba(217,249,157,0.3)]' : 'border-transparent opacity-50 hover:opacity-100'}`}>
                                                      <img src={frame.url} className="w-full h-full object-cover" />
@@ -423,7 +455,7 @@ const App: React.FC = () => {
                              )}
 
                              {inputType === 'Type B' && (
-                                 <div className="border border-dashed border-white/20 rounded-2xl p-10 text-center hover:border-blue-400/50 hover:bg-blue-900/10 transition-all cursor-pointer relative group">
+                                 <div className="border border-dashed border-white/20 rounded-2xl p-8 md:p-10 text-center hover:border-blue-400/50 hover:bg-blue-900/10 transition-all cursor-pointer relative group">
                                      <input type="file" accept="application/pdf" onChange={handlePdfUpload} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
                                      <div className="w-12 h-12 bg-blue-500/20 text-blue-400 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
                                          <FileText size={20}/>
@@ -446,7 +478,7 @@ const App: React.FC = () => {
                                          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
                                          <input 
                                              className="w-full pl-11 pr-32 py-4 glass-input rounded-xl text-sm font-light placeholder-gray-600"
-                                             placeholder="搜索热门话题或粘贴文章链接..."
+                                             placeholder="搜索话题或粘贴文章链接..."
                                              value={inputText || customSearchSource}
                                              onChange={(e) => {
                                                  if (e.target.value.startsWith('http')) setCustomSearchSource(e.target.value);
@@ -548,7 +580,7 @@ const App: React.FC = () => {
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-fade-in-up">
                     
                     {/* LEFT COL: Visuals */}
-                    <div className="lg:col-span-5 space-y-6">
+                    <div className="lg:col-span-5 space-y-6 order-2 lg:order-1">
                         <div className="glass-panel p-6 rounded-[2rem] relative">
                             <div className="absolute top-4 right-4 z-10 bg-black/50 backdrop-blur-md px-3 py-1 rounded-full border border-white/10 text-[10px] font-bold text-white/80 uppercase">
                                 预览
@@ -615,7 +647,7 @@ const App: React.FC = () => {
                         </div>
                     </div>
 
-                    <div className="lg:col-span-7 space-y-6">
+                    <div className="lg:col-span-7 space-y-6 order-1 lg:order-2">
                         {/* Titles */}
                         <div className="glass-panel p-6 rounded-[2rem]">
                             <div className="flex justify-between items-center mb-4">
@@ -637,7 +669,7 @@ const App: React.FC = () => {
                         </div>
 
                         {/* Editor */}
-                        <div className="glass-panel p-6 rounded-[2rem] flex-1 flex flex-col min-h-[600px]">
+                        <div className="glass-panel p-6 rounded-[2rem] flex-1 flex flex-col min-h-[500px]">
                             <div className="flex justify-between items-center mb-6 border-b border-white/5 pb-4">
                                 <div className="flex gap-2">
                                     <button onClick={() => setShowAskModal(true)} className="glass-button px-3 py-1.5 rounded-lg text-[10px] font-bold text-blue-400 flex items-center gap-1 hover:bg-blue-500/10 hover:border-blue-500/30"><MessageSquare size={12}/> 问 AI</button>
@@ -648,10 +680,10 @@ const App: React.FC = () => {
                                 </button>
                             </div>
                             
-                            <input value={editableTitle} onChange={e => setEditableTitle(e.target.value)} className="text-2xl font-bold text-white bg-transparent outline-none mb-6 placeholder-gray-700" placeholder="点击编辑标题..." />
+                            <input value={editableTitle} onChange={e => setEditableTitle(e.target.value)} className="text-xl md:text-2xl font-bold text-white bg-transparent outline-none mb-6 placeholder-gray-700" placeholder="点击编辑标题..." />
                             
                             <div className="flex-1 relative">
-                                <div className="w-full h-full outline-none text-gray-300 leading-8 text-base font-light" contentEditable suppressContentEditableWarning onBlur={e => setEditableBody(e.currentTarget.innerText)}>
+                                <div className="w-full h-full outline-none text-gray-300 leading-8 text-sm md:text-base font-light" contentEditable suppressContentEditableWarning onBlur={e => setEditableBody(e.currentTarget.innerText)}>
                                     {bodyParagraphs.map((p, i) => (
                                         <div key={i} className="group relative mb-6 hover:bg-white/5 rounded px-2 py-1 -mx-2 transition-colors border border-transparent hover:border-white/5">
                                             {rewritingIndex === i ? <div className="flex gap-2 text-purple-400 text-sm items-center py-2"><Loader2 className="animate-spin" size={14}/> AI 重写中...</div> : <p>{p}</p>}
