@@ -16,7 +16,7 @@ const App: React.FC = () => {
   // Input State
   const [inputType, setInputType] = useState<InputType>('Type A');
   const [inputText, setInputText] = useState('');
-  const [videoUrlInput, setVideoUrlInput] = useState(''); // New Video URL input
+  const [videoUrlInput, setVideoUrlInput] = useState(''); 
   const [selectedTone, setSelectedTone] = useState<RednoteTone>('emotional');
   const [imitateText, setImitateText] = useState(''); 
   
@@ -64,7 +64,7 @@ const App: React.FC = () => {
   const [editableTitle, setEditableTitle] = useState('');
   const [editableCoverText, setEditableCoverText] = useState('');
   const [editableCoverSub, setEditableCoverSub] = useState('');
-  const [editablePoints, setEditablePoints] = useState<string[]>([]); // New: Editable Points
+  const [editablePoints, setEditablePoints] = useState<string[]>([]);
   const [editableBody, setEditableBody] = useState('');
   const [selectedTemplate, setSelectedTemplate] = useState<VisualTemplate>('apple_note');
   const [customCoverImage, setCustomCoverImage] = useState<string | null>(null);
@@ -136,7 +136,9 @@ const App: React.FC = () => {
     const ctx = canvas.getContext('2d');
     const extractedFrames: VideoFrame[] = [];
     const duration = video.duration;
-    const count = 6; const interval = duration / (count + 1);
+    // Increased frame count to 12 for better analysis
+    const count = 12; 
+    const interval = duration / (count + 1);
     for (let i = 1; i <= count; i++) {
         const time = interval * i; video.currentTime = time;
         await new Promise((resolve) => { video.onseeked = resolve; });
@@ -151,19 +153,20 @@ const App: React.FC = () => {
       setSearchSources(prev => prev.includes(source) ? prev.filter(s => s !== source) : [...prev, source]);
   };
 
-  // --- ANALYSIS & SEARCH ---
-
   const handleAnalyze = async () => {
       if (!userApiKey) { setIsKeyModalOpen(true); return; }
       setIsAnalyzing(true);
       try {
           let data: any = {};
           if (inputType === 'Type A') {
-              // Handle Video URL or Description
               if (videoUrlInput.trim()) {
                   data = { url: videoUrlInput.trim() };
               } else {
-                  data = { description: inputText || "Video content" }; 
+                  // PASSING FRAMES FOR ANALYSIS
+                  data = { 
+                      description: inputText || "Video content",
+                      frames: frames.map(f => f.url) 
+                  }; 
               }
           } else if (inputType === 'Type B' && pdfBase64) {
               data = { base64: pdfBase64, mimeType: pdfFile?.type };
@@ -215,8 +218,6 @@ const App: React.FC = () => {
       setSelectedResultIds(newSet);
   };
 
-  // --- GENERATION ---
-
   const handleGenerate = async () => {
     if (!userApiKey) { setIsKeyModalOpen(true); return; }
 
@@ -231,7 +232,6 @@ const App: React.FC = () => {
 
     try {
       let contextData: any = {};
-      // Pass Analysis result if exists
       if (analysisResult) {
           contextData.analysis = analysisResult;
       }
@@ -260,7 +260,7 @@ const App: React.FC = () => {
       setEditableTitle(data.content.title);
       setEditableCoverText(data.visualData.elements.coverText.main);
       setEditableCoverSub(data.visualData.elements.coverText.sub);
-      setEditablePoints(data.visualData.elements.knowledgePoints || []); // Init points
+      setEditablePoints(data.visualData.elements.knowledgePoints || []);
       setEditableBody(data.content.fullText);
       setSelectedTemplate(data.visualData.templateRecommendation as VisualTemplate);
       
@@ -270,8 +270,6 @@ const App: React.FC = () => {
       alert(`生成失败: ${error.message}`);
     } finally { setIsLoading(false); }
   };
-
-  // --- RESULT PAGE ACTIONS ---
 
   const onRegenerateTitles = async () => {
       if (!userApiKey) { setIsKeyModalOpen(true); return; }
@@ -288,7 +286,7 @@ const App: React.FC = () => {
       setIsRegeneratingBody(true);
       try {
           const styleRef = selectedTone === 'imitate' ? imitateText : "";
-          const newBody = await rewriteContent(editableBody, styleRef, rewriteInstruction, userApiKey); // Pass custom instruction
+          const newBody = await rewriteContent(editableBody, styleRef, rewriteInstruction, userApiKey); 
           setEditableBody(newBody);
       } catch (e) { alert("生成失败"); }
       setIsRegeneratingBody(false);
@@ -517,7 +515,7 @@ const App: React.FC = () => {
                                         <LinkIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
                                         <input 
                                             className="w-full pl-9 p-3 bg-gray-50 border rounded-xl text-sm focus:ring-2 focus:ring-[#ff2442] outline-none"
-                                            placeholder="粘贴视频链接 (Gemini Pro 分析)..."
+                                            placeholder="粘贴视频链接 (强制解析)..."
                                             value={videoUrlInput}
                                             onChange={(e) => setVideoUrlInput(e.target.value)}
                                         />
@@ -536,7 +534,7 @@ const App: React.FC = () => {
                                 <>
                                     <input type="file" accept="application/pdf" onChange={handlePdfUpload} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
                                     <FileText className="mx-auto text-blue-400 mb-2" size={28} />
-                                    <span className="text-sm font-bold text-gray-700">{pdfFile ? pdfFile.name : "点击上传论文 PDF (Gemini Pro 分析)"}</span>
+                                    <span className="text-sm font-bold text-gray-700">{pdfFile ? pdfFile.name : "点击上传论文 PDF"}</span>
                                 </>
                             )}
                         </div>
@@ -669,7 +667,7 @@ const App: React.FC = () => {
                              <div>
                                 <label className="text-xs font-bold text-gray-900 block mb-2">设计风格</label>
                                 <div className="grid grid-cols-3 gap-2">
-                                    {['apple_note', 'canva_viral', 'card', 'memo', 'literature', 'subtitle', 'notification', 'receipt', 'polaroid', 'chat'].map((t) => (
+                                    {['apple_note', 'memo', 'literature', 'magazine', 'notification', 'receipt', 'polaroid', 'chat'].map((t) => (
                                         <button key={t} onClick={() => setSelectedTemplate(t as VisualTemplate)} className={`py-2 text-[9px] font-bold uppercase rounded border ${selectedTemplate === t ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-500 border-gray-100'}`}>{t.replace('_',' ')}</button>
                                     ))}
                                 </div>
@@ -678,6 +676,7 @@ const App: React.FC = () => {
                     </div>
                 </div>
                 <div className="lg:col-span-7 space-y-6">
+                    {/* ... Title List ... */}
                     <div className="bg-white rounded-3xl shadow-lg border border-gray-100 p-6">
                         <div className="flex justify-between items-center mb-4">
                             <h3 className="text-sm font-bold text-gray-400 uppercase flex items-center gap-2"><Type size={16}/> 选择标题</h3>
@@ -696,6 +695,8 @@ const App: React.FC = () => {
                             ))}
                         </div>
                     </div>
+
+                    {/* Main Editor with Paragraph Rewriting */}
                     <div className="bg-white rounded-3xl shadow-xl border border-gray-100 overflow-hidden">
                         <div className="px-6 py-4 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
                             <span className="text-sm font-bold text-gray-700 flex gap-2"><PenTool size={16} className="text-[#ff2442]"/> 内容编辑</span>

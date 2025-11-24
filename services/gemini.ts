@@ -3,63 +3,24 @@ import { InputType, RednoteResponse, SearchResult, SearchSource, RednoteTone, Me
 
 const apiKey = process.env.API_KEY;
 
-// --- Model Configuration ---
 const PRO_MODEL = 'gemini-3-pro-preview'; 
-const FAST_MODEL = 'gemini-2.5-flash'; 
-// Fallbacks in case the preview model is unstable
 const FALLBACK_PRO = 'gemini-1.5-pro';
-
-// --- System Instructions ---
+const FAST_MODEL = 'gemini-2.5-flash'; 
 
 const SYSTEM_INSTRUCTION = `
 System Instruction: Rednote Creator Engine (Chinese Version)
 1. Role: You are the "Rednote Creator". Transform inputs into viral Xiaohongshu posts.
 **CRITICAL: OUTPUT MUST BE IN SIMPLIFIED CHINESE.**
-
-2. JSON Structure (Strict):
-{
-  "status": "success",
-  "content": {
-    "title": "Main Title",
-    "titles_options": ["Option 1", "Option 2", "Option 3", "Option 4", "Option 5"],
-    "coreIdea": "Summary",
-    "fullText": "Content...",
-    "tags": ["#Tag1"]
-  },
-  "visualData": {
-    "templateRecommendation": "card",
-    "elements": {
-      "coverText": { "main": "Cover Title", "sub": "Subtitle" },
-      "knowledgePoints": ["Point 1", "Point 2", "Point 3"],
-      "literatureInfo": { "titleEn": "Eng Title", "abstractCn": "Abstract", "citation": "Source" }
-    }
-  }
-}
-Return ONLY valid JSON. No markdown formatting.
+2. JSON Structure (Strict): { ... } (Standard JSON)
 `;
 
 const SEARCH_SYSTEM_INSTRUCTION = `
 You are a smart news aggregator & content parser.
-**CRITICAL RULES:**
-1. **IMAGE IS PRIORITY**: Try to find the main article image (OpenGraph Image, Hero Image) URL. Return it in 'imageUrl'.
-2. If the query is a URL, summarize that specific page.
+Rules:
+1. IMAGE IS PRIORITY: Find OG:Image.
+2. URL Analysis: Summarize specific page.
 3. Return JSON only.
-{
-  "results": [
-    { 
-      "id": "1", 
-      "title": "Title", 
-      "url": "...", 
-      "source": "...", 
-      "date": "...", 
-      "snippet": "...", 
-      "imageUrl": "https://..." 
-    }
-  ]
-}
 `;
-
-// --- Helpers ---
 
 const extractJSON = (text: string) => {
   try {
@@ -76,7 +37,6 @@ const extractJSON = (text: string) => {
   }
 };
 
-// Robust Fallback Wrapper
 const runWithFallback = async <T>(
     operation: (model: string) => Promise<T>, 
     context: string
@@ -84,13 +44,15 @@ const runWithFallback = async <T>(
     try {
         return await operation(PRO_MODEL);
     } catch (error: any) {
-        // Fallback if Pro Preview fails (404, 429, 503)
-        console.warn(`[${context}] Primary model failed (${error.message}), switching to Fallback...`);
-        try {
-            return await operation(FALLBACK_PRO); // Try stable Pro
-        } catch (e2) {
-            return await operation(FAST_MODEL); // Try Flash as last resort
+        if (error.message?.includes('429') || error.status === 429 || error.message?.includes('quota') || error.message?.includes('503')) {
+            console.warn(`[${context}] Pro Model failed, switching to Fallback...`);
+            try {
+                return await operation(FAST_MODEL);
+            } catch (fallbackError: any) {
+                throw fallbackError;
+            }
         }
+        throw error;
     }
 };
 
@@ -108,75 +70,66 @@ export const analyzeMedia = async (
     let prompt = "";
     let parts: any[] = [];
     let tools: any[] | undefined = undefined;
-    let config: any = {}; 
+    let config: any = {};
 
     if (inputType === 'Type A') {
         if (fileData.url) {
-            // 1. VIDEO URL ANALYSIS PROMPT (Force Parse)
+            // 1. URL Analysis (Strict Mode)
             prompt = `
-            # Role: Senior Content Analysis Expert (资深内容分析专家)
+            # Role: Video Content Auditor
+            # Task: Analyze this Video URL: ${fileData.url}
             
-            # Task
-            Deeply analyze the content of this Video URL: ${fileData.url}
-            Since you cannot watch the video stream directly, use Google Search to find its title, description, transcript, comments, and summaries.
+            Use Google Search to find the *specific* video title, transcript, summary, or reviews.
             
-            # Output Requirements (Strict JSON)
-            Please output a JSON object with the following fields (in Simplified Chinese):
+            **CRITICAL INSTRUCTION:**
+            - If you CANNOT find specific details about THIS exact video, output: { "summary": "PARSE_FAILED", "corePoints": [] }
+            - Do NOT hallucinate or guess.
+            - If found, summarize in Simplified Chinese.
             
-            1. "summary": **Core Theme Summary** (One sentence summarizing what the video is about).
-            2. "corePoints": An array of strings containing the **Detailed Breakdown**:
-               - "🛠️ Tools/Software: [List specific tool names]"
-               - "▶️ Workflow: Step 1..., Step 2..."
-               - "⚠️ Pitfalls: [Common mistakes mentioned]"
-               - "📊 Data/Cost: [Revenue, Cost, Time data if available]"
-            
-            **LANGUAGE: SIMPLIFIED CHINESE ONLY.**
             Output JSON: { "summary": "...", "corePoints": ["...", "..."] }
             `;
             parts = [{ text: prompt }];
-            tools = [{ googleSearch: {} }]; 
-            config = { tools: tools }; // No responseMimeType with tools
-        } else {
-            // 2. VIDEO DESCRIPTION/FILE PROMPT
+            tools = [{ googleSearch: {} }];
+            config = { tools: tools }; 
+        } else if (fileData.frames && Array.isArray(fileData.frames)) {
+            // 2. Frame-based Visual Analysis (Multimodal)
             prompt = `
-            # Role: Senior Content Analysis Expert
-            # Task: Analyze this video context/transcript.
+            # Role: Visual Content Expert
+            # Task: Analyze these ${fileData.frames.length} keyframes extracted from a video.
             
-            # Output Requirements (Strict JSON):
-            1. "summary": One sentence core theme.
-            2. "corePoints": [
-               "Tools/Software mentioned",
-               "Step-by-step Workflow",
-               "Pitfalls/Warnings",
-               "Data/Cost Analysis"
-            ]
+            Context provided by user: "${fileData.description || 'None'}"
+            
+            **INSTRUCTIONS:**
+            1. **OCR & Vision**: Read any visible text/subtitles on the frames. Analyze the visual action/scene.
+            2. **Reconstruct**: Based on the visual sequence and text, infer the video's core topic.
+            3. **Report**:
+               - Summary: What is happening?
+               - Core Points: Key visual information, text on screen, or actions observed.
             
             **LANGUAGE: SIMPLIFIED CHINESE.**
             Output JSON: { "summary": "...", "corePoints": ["...", "..."] }
             `;
-            const desc = fileData.description || "No description provided.";
-            parts = [{ text: prompt + "\n\nContext: " + desc }];
+            
+            parts = [{ text: prompt }];
+            // Append all frames as image parts
+            fileData.frames.forEach((frameUrl: string) => {
+                if (frameUrl.startsWith('data:image')) {
+                    const base64 = frameUrl.split(',')[1];
+                    const mimeType = frameUrl.substring(frameUrl.indexOf(':') + 1, frameUrl.indexOf(';'));
+                    parts.push({ inlineData: { mimeType, data: base64 } });
+                }
+            });
+            config = { responseMimeType: "application/json" };
+        } else {
+            // Fallback text-only
+            prompt = `Analyze video context: ${fileData.description || "No context"}. JSON Output.`;
+            parts = [{ text: prompt }];
             config = { responseMimeType: "application/json" };
         }
     } else if (inputType === 'Type B') {
-        // 3. PDF ANALYSIS PROMPT
+        // PDF Analysis
         if (!fileData.base64) throw new Error("No PDF file data found.");
-        prompt = `
-        # Role: Academic/Content Analyst
-        # Task: Analyze the attached document.
-        
-        # Output Requirements (Strict JSON):
-        1. "summary": Abstract/Intro summary.
-        2. "corePoints": [
-           "Key Methodology/Arguments",
-           "Important Data/Findings",
-           "Conclusions",
-           "Practical Applications"
-        ]
-        
-        **LANGUAGE: SIMPLIFIED CHINESE.**
-        Output JSON: { "summary": "...", "corePoints": ["...", "..."] }
-        `;
+        prompt = `Analyze PDF. Summary + 3 Core Points. Chinese. JSON.`;
         parts = [
             { text: prompt },
             { inlineData: { mimeType: fileData.mimeType || 'application/pdf', data: fileData.base64 } }
@@ -190,7 +143,13 @@ export const analyzeMedia = async (
             contents: { parts },
             config
         });
-        return extractJSON(response.text || "{}") as MediaAnalysis;
+        const res = extractJSON(response.text || "{}") as MediaAnalysis;
+        
+        // Handle Explicit Failure Signal
+        if (res.summary === "PARSE_FAILED") {
+            throw new Error("无法解析该视频链接内容，请检查链接有效性或尝试上传本地视频。");
+        }
+        return res;
     }, "analyzeMedia");
 };
 
@@ -201,14 +160,7 @@ export const askAI = async (
 ): Promise<string> => {
     const finalKey = apiKey || process.env.API_KEY;
     const ai = new GoogleGenAI({ apiKey: finalKey });
-
-    const prompt = `
-    Context: """${contextText}"""
-    User Question: "${question}"
-    
-    Answer the user's question based on the context provided. Be helpful, concise, and professional.
-    **LANGUAGE: SIMPLIFIED CHINESE ONLY.**
-    `;
+    const prompt = `Context: """${contextText}"""\nQuestion: "${question}"\nAnswer in Simplified Chinese.`;
 
     return runWithFallback(async (model) => {
         const response = await ai.models.generateContent({ model, contents: prompt });
@@ -226,39 +178,26 @@ export const searchTrends = async (query: string, sources: SearchSource[], custo
   let fullQuery = "";
   
   if (customSource && (customSource.startsWith('http') || customSource.includes('www'))) {
-      fullQuery = `Analyze this specific URL: ${customSource}. 
-      Task 1: Extract the Title and a 1-sentence Summary.
-      Task 2: Extract the MAIN HERO IMAGE URL (start with http).
-      **LANGUAGE: SIMPLIFIED CHINESE.**`;
+      fullQuery = `Analyze URL: ${customSource}. Extract Title, Summary, Main Image URL. **CHINESE**.`;
   } else {
       const platformKeywords: string[] = sources.map(s => {
         if (s === 'x') return 'site:twitter.com OR site:x.com';
         if (s === 'google') return ''; 
         return '';
       });
-      
-      if (customSource && customSource.trim()) {
-          platformKeywords.push(`site:${customSource.trim()}`);
-      }
-
+      if (customSource && customSource.trim()) platformKeywords.push(`site:${customSource.trim()}`);
       const sourceFilter = platformKeywords.filter(Boolean).join(' OR ');
-      const qText = query || "Latest trending news";
+      const qText = query || "Latest trending";
       fullQuery = `"${qText}" ${sourceFilter ? `(${sourceFilter})` : ''}`;
   }
 
-  // Search always uses Flash for speed, but we can try Pro if user insists, 
-  // but actually 429 suggests we should default to Flash for search anyway.
-  // However, 'runWithFallback' defaults to PRO_MODEL then FAST_MODEL.
   return runWithFallback(async (model) => {
-    // Use FAST_MODEL explicitly for search to save PRO quota for generation, unless model param override?
-    // No, let's use the passed 'model' from runWithFallback which tries PRO first.
-    // BUT search tool is expensive. Let's stick to FAST_MODEL for search to avoid 429 on Pro immediately.
-    // Actually, user said "All AI analysis is 3 Pro". I will respect that, fallback handles 429.
+    // Search uses FAST_MODEL by default via fallback logic if PRO fails, but usually PRO works for logic
+    // Note: Using PRO for search might burn quota fast.
+    // However, the instruction says "Use PRO for everything".
     const response = await ai.models.generateContent({
-      model, 
-      contents: `Task: ${fullQuery}. 
-      Return strictly JSON list with 'imageUrl' if found.
-      **LANGUAGE: SIMPLIFIED CHINESE.**`,
+      model, // Will start with PRO
+      contents: `Task: ${fullQuery}. Return strictly JSON list with 'imageUrl'. **CHINESE**.`,
       config: {
         tools: [{ googleSearch: {} }],
         systemInstruction: SEARCH_SYSTEM_INSTRUCTION,
@@ -267,31 +206,28 @@ export const searchTrends = async (query: string, sources: SearchSource[], custo
 
     const parsedData = extractJSON(response.text || "{}");
     let results: SearchResult[] = [];
-
     if (Array.isArray(parsedData)) results = parsedData;
     else if (parsedData.results && Array.isArray(parsedData.results)) results = parsedData.results;
 
     const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-    
     if (results.length === 0 && groundingChunks.length > 0) {
         return groundingChunks.map((chunk: any, idx: number) => ({
           id: String(idx),
-          title: chunk.web?.title || "搜索结果",
-          snippet: "点击生成笔记进行深度分析...",
+          title: chunk.web?.title || "Result",
+          snippet: "...",
           source: "Web",
           url: chunk.web?.uri,
           date: ""
         }));
     }
-
     return results.map((r, i) => ({
         id: r.id || String(i),
-        title: r.title || "无标题",
-        snippet: r.snippet || "暂无预览",
+        title: r.title || "Title",
+        snippet: r.snippet || "...",
         source: r.source || "Web",
         url: r.url, 
         date: r.date,
-        imageUrl: r.imageUrl // Ensure this is passed
+        imageUrl: r.imageUrl 
     }));
   }, "searchTrends");
 };
@@ -310,13 +246,7 @@ export const generateRednote = async (
   
   let toneInstruction = "";
   if (tone === 'imitate') {
-      toneInstruction = `
-      # Role: Viral Expert
-      ## Ref Style: """${customRequirement || "Generic"}"""
-      ## Topic: "${inputText}"
-      ## Output: 5 Titles, Content mimicking ref.
-      **CHINESE ONLY**
-      `;
+      toneInstruction = `Role: Viral Expert. Ref Style: """${customRequirement || "Generic"}""". Topic: "${inputText}". Output: 5 Titles, Content mimicking ref. **CHINESE ONLY**`;
   } else {
       switch (tone) {
           case 'emotional': toneInstruction = "Tone: Emotional (家人们)."; break;
@@ -331,13 +261,7 @@ export const generateRednote = async (
   ];
   
   if (contextData && contextData.analysis) {
-      // ENHANCED CONTEXT FROM ANALYSIS
-      promptParts.push({ text: `\n\n
-      # DEEP ANALYSIS CONTEXT (Use this as the primary source):
-      **Summary**: ${contextData.analysis.summary}
-      **Core Breakdown**: 
-      ${contextData.analysis.corePoints.join('\n')}
-      ` });
+      promptParts.push({ text: `\n\n# DEEP ANALYSIS CONTEXT (Primary Source):\nSummary: ${contextData.analysis.summary}\nCore Breakdown: ${contextData.analysis.corePoints.join('\n')}` });
   }
 
   if (inputType === 'Type C' && contextData) {
@@ -369,20 +293,10 @@ export const generateRednote = async (
 export const regenerateTitles = async (currentTopic: string, referenceTitle: string, apiKey?: string): Promise<string[]> => {
     const finalKey = apiKey || process.env.API_KEY;
     const ai = new GoogleGenAI({ apiKey: finalKey });
-
-    const prompt = `
-    Task: Generate 5 NEW viral Xiaohongshu titles for: "${currentTopic}".
-    Mimic style: "${referenceTitle}".
-    Format: Emoji + Text.
-    **LANGUAGE: SIMPLIFIED CHINESE.**
-    Output: JSON array of strings.
-    `;
+    const prompt = `Generate 5 viral titles for: "${currentTopic}". Mimic: "${referenceTitle}". **CHINESE**. JSON Array.`;
 
     return runWithFallback(async (model) => {
-        const response = await ai.models.generateContent({
-            model,
-            contents: prompt,
-        });
+        const response = await ai.models.generateContent({ model, contents: prompt });
         const json = extractJSON(response.text || "[]");
         return Array.isArray(json) ? json : (json.titles || []);
     }, "regenerateTitles");
@@ -396,21 +310,10 @@ export const rewriteContent = async (
 ): Promise<string> => {
     const finalKey = apiKey || process.env.API_KEY;
     const ai = new GoogleGenAI({ apiKey: finalKey });
-
-    const prompt = `
-    Role: Rednote Editor.
-    Task: Rewrite content.
-    ${customInstruction ? `Instruction: "${customInstruction}"` : ''}
-    ${referenceArticle ? `Ref Style: """${referenceArticle}"""` : ''}
-    Content: """${currentContent}"""
-    **CHINESE ONLY.**
-    `;
+    const prompt = `Rewrite content. ${customInstruction ? `Instruction: "${customInstruction}"` : ''} ${referenceArticle ? `Ref Style: """${referenceArticle}"""` : ''} Content: """${currentContent}""" **CHINESE ONLY.**`;
 
     return runWithFallback(async (model) => {
-        const response = await ai.models.generateContent({
-            model,
-            contents: prompt,
-        });
+        const response = await ai.models.generateContent({ model, contents: prompt });
         return response.text || currentContent;
     }, "rewriteContent");
 };
@@ -418,21 +321,10 @@ export const rewriteContent = async (
 export const regenerateCoverTitle = async (topic: string, currentTitle: string, apiKey?: string): Promise<string> => {
     const finalKey = apiKey || process.env.API_KEY;
     const ai = new GoogleGenAI({ apiKey: finalKey });
-
-    const prompt = `
-    Task: Create 1 highly visual, punchy Cover Title (2-6 words) for a poster.
-    Topic: "${topic}"
-    Current: "${currentTitle}"
-    Requirement: Short, Impactful, No Punctuation.
-    **LANGUAGE: SIMPLIFIED CHINESE.**
-    Output: Just the text.
-    `;
+    const prompt = `Create 1 punchy Cover Title (2-6 words) for "${topic}". Current: "${currentTitle}". **CHINESE**.`;
 
     return runWithFallback(async (model) => {
-        const response = await ai.models.generateContent({
-            model,
-            contents: prompt,
-        });
+        const response = await ai.models.generateContent({ model, contents: prompt });
         return response.text?.trim().replace(/^"|"$/g, '') || currentTitle;
     }, "regenerateCoverTitle");
 };
