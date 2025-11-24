@@ -11,7 +11,8 @@ export interface SearchResult {
   source: string;
   url?: string;
   imageUrl?: string; 
-  date?: string;
+  date?: string; // Added date
+  author?: string; // Added author
 }
 
 export interface VideoFrame {
@@ -23,6 +24,7 @@ export interface VideoFrame {
 export interface MediaAnalysis {
   summary: string;
   corePoints: string[];
+  keywords?: string[]; // Added keywords for richer analysis display
 }
 
 export interface RednoteContent {
@@ -50,7 +52,6 @@ export interface VisualElement {
   } | null;
 }
 
-// Removed 'canva_viral', 'card', 'subtitle' as requested
 export type VisualTemplate = 
   | 'apple_note' 
   | 'memo' 

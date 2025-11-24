@@ -1,752 +1,364 @@
 import React, { useState, useEffect, Suspense } from 'react';
-import { generateRednote, searchTrends, regenerateTitles, rewriteContent, regenerateCoverTitle, analyzeMedia, askAI } from './services/gemini';
-import { InputType, RednoteResponse, SearchResult, SearchSource, VideoFrame, VisualTemplate, RednoteTone, MediaAnalysis } from './types';
-// Lazy load VisualCard
+import { generateRednote, searchTrends, regenerateTitles, rewriteContent, regenerateCoverTitle, analyzeMedia } from './services/gemini';
+import { InputType, RednoteResponse, SearchResult, SearchSource, VisualTemplate, RednoteTone, MediaAnalysis } from './types';
 const VisualCard = React.lazy(() => import('./components/VisualCard').then(module => ({ default: module.VisualCard })));
-import { Sparkles, Copy, Loader2, Video, Type, Search, Check, Upload, Image as ImageIcon, Globe, Youtube, Twitter, ArrowLeft, PenTool, FileText, RefreshCw, Wand2, Link as LinkIcon, Key, X, PlayCircle, Dice5, CheckCircle, AlertCircle, Layout, Type as TypeIcon, MessageSquare, BrainCircuit, Plus, Trash2, Zap, BarChart2, User, Settings, Menu } from 'lucide-react';
+import { Loader2, Video, Search, Upload, Image as ImageIcon, ArrowLeft, PenTool, FileText, RefreshCw, Wand2, Link as LinkIcon, Key, X, PlayCircle, Dice5, CheckCircle, AlertCircle, Type as TypeIcon, MessageSquare, BrainCircuit, Plus, Trash2, Globe, Twitter, ExternalLink, Clock, ChevronRight, Zap } from 'lucide-react';
 
 const App: React.FC = () => {
+  // State
   const [step, setStep] = useState<'input' | 'result'>('input');
-
-  // API Key State
-  const [userApiKey, setUserApiKey] = useState('');
-  const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
-  const [tempKey, setTempKey] = useState('');
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Mobile Sidebar State
-
-  // Input State
+  const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_key') || '');
+  const [showKeyModal, setShowKeyModal] = useState(false);
+  
+  // Data
   const [inputType, setInputType] = useState<InputType>('Type A');
-  const [inputText, setInputText] = useState('');
-  const [videoUrlInput, setVideoUrlInput] = useState(''); 
-  const [selectedTone, setSelectedTone] = useState<RednoteTone>('emotional');
-  const [imitateText, setImitateText] = useState(''); 
+  const [inputUrl, setInputUrl] = useState(''); // For Video URL or Custom Link
+  const [inputFile, setInputFile] = useState<File | null>(null);
+  const [pdfBase64, setPdfBase64] = useState<string>('');
+  const [inputText, setInputText] = useState(''); // Search query or extra context
   
-  // Analysis State
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState<MediaAnalysis | null>(null);
-
-  // Media State
-  const [videoFile, setVideoFile] = useState<File | null>(null);
-  const [frames, setFrames] = useState<VideoFrame[]>([]);
-  const [selectedFrameId, setSelectedFrameId] = useState<string | null>(null);
-  const [isProcessingVideo, setIsProcessingVideo] = useState(false);
-  
-  // Type B (PDF) State
-  const [pdfFile, setPdfFile] = useState<File | null>(null);
-  const [pdfBase64, setPdfBase64] = useState<string | null>(null);
-
-  // Search State
-  const [searchSources, setSearchSources] = useState<SearchSource[]>([]);
-  const [customSearchSource, setCustomSearchSource] = useState('');
-  const [linkParseStatus, setLinkParseStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  // Search Data
+  const [searchSources, setSearchSources] = useState<SearchSource[]>(['google']);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [selectedResultIds, setSelectedResultIds] = useState<Set<string>>(new Set());
   const [isSearching, setIsSearching] = useState(false);
-
-  // Generation & Edit State
-  const [isLoading, setIsLoading] = useState(false);
+  
+  // Analysis Data
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysis, setAnalysis] = useState<MediaAnalysis | null>(null);
+  
+  // Generation Data
+  const [isGenerating, setIsGenerating] = useState(false);
   const [result, setResult] = useState<RednoteResponse | null>(null);
-  const [isRegeneratingTitle, setIsRegeneratingTitle] = useState(false);
-  const [isRegeneratingBody, setIsRegeneratingBody] = useState(false);
-  const [isRegeneratingCover, setIsRegeneratingCover] = useState(false);
-  const [rewritingIndex, setRewritingIndex] = useState<number | null>(null);
+  const [tone, setTone] = useState<RednoteTone>('emotional');
   
-  // Rewrite Custom State
-  const [showRewriteModal, setShowRewriteModal] = useState(false);
-  const [rewriteInstruction, setRewriteInstruction] = useState('');
+  // Edit State
+  const [editTitle, setEditTitle] = useState('');
+  const [editBody, setEditBody] = useState('');
+  const [editCoverMain, setEditCoverMain] = useState('');
+  const [editCoverSub, setEditCoverSub] = useState('');
+  const [coverImg, setCoverImg] = useState<string | null>(null);
+  const [template, setTemplate] = useState<VisualTemplate>('apple_note');
+  const [fontSize, setFontSize] = useState(1);
   
-  // Ask AI State
-  const [askQuestion, setAskQuestion] = useState('');
-  const [askAnswer, setAskAnswer] = useState('');
-  const [isAsking, setIsAsking] = useState(false);
-  const [showAskModal, setShowAskModal] = useState(false);
-
-  // Independent Editing States
-  const [editableTitle, setEditableTitle] = useState('');
-  const [editableCoverText, setEditableCoverText] = useState('');
-  const [editableCoverSub, setEditableCoverSub] = useState('');
-  const [editablePoints, setEditablePoints] = useState<string[]>([]); 
-  const [editableBody, setEditableBody] = useState('');
-  const [selectedTemplate, setSelectedTemplate] = useState<VisualTemplate>('apple_note');
-  const [customCoverImage, setCustomCoverImage] = useState<string | null>(null);
+  // Handlers
+  const saveKey = (k: string) => { localStorage.setItem('gemini_key', k); setApiKey(k); setShowKeyModal(false); };
   
-  // Visual Controls
-  const [coverFontSize, setCoverFontSize] = useState<number>(1);
-
-  const [copied, setCopied] = useState(false);
-
-  // --- Init ---
-  useEffect(() => {
-      const storedKey = localStorage.getItem('rednote_gemini_key');
-      if (storedKey) setUserApiKey(storedKey);
-  }, []);
-
-  const saveApiKey = () => {
-      if (tempKey.trim()) {
-          setUserApiKey(tempKey.trim());
-          localStorage.setItem('rednote_gemini_key', tempKey.trim());
-          setIsKeyModalOpen(false);
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>, type: 'video' | 'pdf') => {
+      const f = e.target.files?.[0];
+      if(!f) return;
+      setInputFile(f);
+      if(type === 'pdf') {
+          const r = new FileReader();
+          r.onload = () => setPdfBase64((r.result as string).split(',')[1]);
+          r.readAsDataURL(f);
       }
   };
 
-  // --- Handlers ---
-  const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setVideoFile(file);
-      setFrames([]); 
-      setAnalysisResult(null);
-      processVideo(file);
-    }
-  };
-  
-  const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) {
-          setPdfFile(file);
-          setAnalysisResult(null);
-          const reader = new FileReader();
-          reader.onload = () => {
-              const base64String = (reader.result as string).split(',')[1];
-              setPdfBase64(base64String);
-          };
-          reader.readAsDataURL(file);
-      }
-  };
-  
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) {
-          const url = URL.createObjectURL(file);
-          setCustomCoverImage(url);
-      }
+  // Step 1: Search (Type C only)
+  const doSearch = async () => {
+      if(!apiKey) { setShowKeyModal(true); return; }
+      setIsSearching(true);
+      try {
+          const res = await searchTrends(inputText, searchSources, inputUrl, apiKey);
+          setSearchResults(res);
+      } catch(e) { alert("搜索失败"); }
+      setIsSearching(false);
   };
 
-  const handleRandomImage = () => {
-      const randomId = Math.floor(Math.random() * 1000);
-      setCustomCoverImage(`https://picsum.photos/seed/${randomId}/800/1000`);
-  };
-
-  const processVideo = async (file: File) => {
-    setIsProcessingVideo(true);
-    const videoUrl = URL.createObjectURL(file);
-    const video = document.createElement('video');
-    video.src = videoUrl; video.muted = true; video.crossOrigin = "anonymous";
-    await new Promise((resolve) => { video.onloadedmetadata = resolve; });
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    const extractedFrames: VideoFrame[] = [];
-    const duration = video.duration;
-    const count = 12; const interval = duration / (count + 1);
-    for (let i = 1; i <= count; i++) {
-        const time = interval * i; video.currentTime = time;
-        await new Promise((resolve) => { video.onseeked = resolve; });
-        canvas.width = video.videoWidth / 2; canvas.height = video.videoHeight / 2;
-        ctx?.drawImage(video, 0, 0, canvas.width, canvas.height);
-        extractedFrames.push({ id: `frame-${i}`, url: canvas.toDataURL('image/jpeg', 0.8), timestamp: time });
-    }
-    setFrames(extractedFrames); setIsProcessingVideo(false);
-  };
-
-  const toggleSource = (source: SearchSource) => {
-      setSearchSources(prev => prev.includes(source) ? prev.filter(s => s !== source) : [...prev, source]);
-  };
-
-  const handleAnalyze = async () => {
-      if (!userApiKey) { setIsKeyModalOpen(true); return; }
+  // Step 2: Analyze (All Types)
+  const doAnalyze = async () => {
+      if(!apiKey) { setShowKeyModal(true); return; }
       setIsAnalyzing(true);
       try {
           let data: any = {};
-          if (inputType === 'Type A') {
-              if (videoUrlInput.trim()) {
-                  data = { url: videoUrlInput.trim() };
-              } else {
-                  data = { 
-                      description: inputText || "Video content",
-                      frames: frames.map(f => f.url) 
-                  }; 
-              }
-          } else if (inputType === 'Type B' && pdfBase64) {
-              data = { base64: pdfBase64, mimeType: pdfFile?.type };
-          }
+          if(inputType === 'Type A') data = { url: inputUrl, description: inputFile ? "Local Video" : "" }; // Real video bytes upload omitted for browser simplicity, treating as desc if no URL
+          if(inputType === 'Type B') data = { base64: pdfBase64 };
+          if(inputType === 'Type C') data = { searchResults }; // Pass search results for analysis
           
-          const analysis = await analyzeMedia(inputType as 'Type A'|'Type B', data, userApiKey);
-          setAnalysisResult(analysis);
-      } catch (e: any) {
-          alert(`分析失败: ${e.message}`);
-      } finally {
-          setIsAnalyzing(false);
-      }
+          const res = await analyzeMedia(inputType, data, apiKey);
+          setAnalysis(res);
+      } catch(e:any) { alert(e.message); }
+      setIsAnalyzing(false);
   };
 
-  const handleSearch = async () => {
-      if (!inputText.trim() && !customSearchSource) return;
-      if (!userApiKey) { setIsKeyModalOpen(true); return; } 
-      
-      setIsSearching(true); setSearchResults([]); setSelectedResultIds(new Set());
-      if (customSearchSource) setLinkParseStatus('loading');
-      
+  // Step 3: Generate
+  const doGenerate = async () => {
+      if(!analysis) return;
+      setIsGenerating(true);
       try {
-          const query = customSearchSource ? "" : inputText; 
-          const results = await searchTrends(query, searchSources, customSearchSource, userApiKey);
-          setSearchResults(results || []);
-          
-          if (results.length > 0 && results[0].imageUrl && results[0].imageUrl.startsWith('http')) {
-              setCustomCoverImage(results[0].imageUrl);
+          const res = await generateRednote(inputType, analysis, tone, "", apiKey);
+          setResult(res);
+          setEditTitle(res.content.title);
+          setEditBody(res.content.fullText);
+          setEditCoverMain(res.visualData.elements.coverText.main);
+          setEditCoverSub(res.visualData.elements.coverText.sub);
+          // Auto pick image from search if available
+          if(inputType === 'Type C' && searchResults.length > 0) {
+              const img = searchResults.find(r => r.imageUrl)?.imageUrl;
+              if(img) setCoverImg(img);
           }
-
-          if (customSearchSource) {
-              if (results.length > 0) {
-                  setLinkParseStatus('success');
-                  setSelectedResultIds(new Set([results[0].id]));
-              } else {
-                  setLinkParseStatus('error');
-              }
-          }
-      } catch (e: any) {
-          console.error(e); 
-          if (customSearchSource) setLinkParseStatus('error');
-          alert(`搜索失败: ${e.message}`);
-      } finally { setIsSearching(false); }
+          setStep('result');
+      } catch(e:any) { alert(e.message); }
+      setIsGenerating(false);
   };
 
-  const toggleResultSelection = (id: string) => {
-      const newSet = new Set(selectedResultIds);
-      if (newSet.has(id)) newSet.delete(id); else newSet.add(id);
-      setSelectedResultIds(newSet);
-  };
-
-  const handleGenerate = async () => {
-    if (!userApiKey) { setIsKeyModalOpen(true); return; }
-
-    const hasInput = !!inputText.trim() || !!videoUrlInput.trim();
-    const hasCustomLink = !!customSearchSource.trim();
-    const hasContextTypeC = inputType === 'Type C' && selectedResultIds.size > 0;
-    
-    if (inputType === 'Type C' && !hasContextTypeC && !hasCustomLink) { alert("请先搜索并选择素材，或输入自定义链接"); return; }
-    if (selectedTone === 'imitate' && !imitateText) { alert("请在下方文本框粘贴要模仿的爆款文案"); return; }
-
-    setIsLoading(true); setResult(null);
-
-    try {
-      let contextData: any = {};
-      if (analysisResult) {
-          contextData.analysis = analysisResult;
-      }
-
-      if (inputType === 'Type C') {
-          if (selectedResultIds.size > 0) {
-              contextData.searchResults = searchResults.filter(r => selectedResultIds.has(r.id));
-              if (!customCoverImage) {
-                  const img = contextData.searchResults.find((r: any) => r.imageUrl);
-                  if (img) setCustomCoverImage(img.imageUrl);
-              }
-          } else if (hasCustomLink) {
-              contextData.searchResults = [{ url: customSearchSource, title: "Custom Link content" }];
-          }
-      } else if (inputType === 'Type A') {
-          contextData.frameCount = frames.length;
-          contextData.hasVideo = !!videoFile;
-      } else if (inputType === 'Type B' && pdfBase64) {
-          contextData.fileData = pdfBase64;
-          contextData.mimeType = pdfFile?.type;
-      }
-
-      const finalInputText = inputText || videoUrlInput || "Based on the provided analysis/content";
-      
-      const data = await generateRednote(inputType, finalInputText, contextData, selectedTone, imitateText, userApiKey);
-      
-      setResult(data);
-      setEditableTitle(data.content.title);
-      setEditableCoverText(data.visualData.elements.coverText.main);
-      setEditableCoverSub(data.visualData.elements.coverText.sub);
-      setEditablePoints(data.visualData.elements.knowledgePoints || []);
-      setEditableBody(data.content.fullText);
-      setSelectedTemplate(data.visualData.templateRecommendation as VisualTemplate);
-      
-      setStep('result'); window.scrollTo(0, 0);
-  
-      // Close sidebar on mobile after generation
-      setIsSidebarOpen(false);
-    } catch (error: any) {
-      console.error(error); 
-      alert(`生成失败: ${error.message}`);
-    } finally { setIsLoading(false); }
-  };
-
-  const onRegenerateTitles = async () => { if(!userApiKey){setIsKeyModalOpen(true);return} setIsRegeneratingTitle(true); try{ const t=await regenerateTitles(inputText||"Idea",editableTitle,userApiKey); if(result)setResult({...result,content:{...result.content,titles_options:t}}); }catch(e){alert("Failed")} setIsRegeneratingTitle(false); };
-  const onRegenerateBody = async () => { if(!userApiKey){setIsKeyModalOpen(true);return} setIsRegeneratingBody(true); try{ const b=await rewriteContent(editableBody,selectedTone==='imitate'?imitateText:"",rewriteInstruction,userApiKey); setEditableBody(b); }catch(e){alert("Failed")} setIsRegeneratingBody(false); setShowRewriteModal(false); };
-  const onRegenerateParagraph = async (p:string, i:number) => { if(!userApiKey){setIsKeyModalOpen(true);return} setRewritingIndex(i); try{ const t=await rewriteContent(p,selectedTone==='imitate'?imitateText:"","",userApiKey); setEditableBody(prev=>prev.replace(p,t)); }catch(e){alert("Failed")} setRewritingIndex(null); };
-  const onRegenerateCoverTitle = async () => { if(!userApiKey){setIsKeyModalOpen(true);return} setIsRegeneratingCover(true); try{ const t=await regenerateCoverTitle(editableTitle,editableCoverText,userApiKey); setEditableCoverText(t); }catch(e){alert("Failed")} setIsRegeneratingCover(false); };
-  const onAskAI = async () => { if(!userApiKey||!askQuestion.trim())return; setIsAsking(true); try{ const a=await askAI(editableBody,askQuestion,userApiKey); setAskAnswer(a); }catch(e){setAskAnswer("Error");} setIsAsking(false); };
-
-  const updatePoint = (idx: number, val: string) => { const newPoints = [...editablePoints]; newPoints[idx] = val; setEditablePoints(newPoints); };
-  const addPoint = () => setEditablePoints([...editablePoints, "新亮点"]);
-  const removePoint = (idx: number) => setEditablePoints(editablePoints.filter((_, i) => i !== idx));
-
-  const getVisualBackground = () => { if(customCoverImage) return customCoverImage; if(inputType === 'Type A') return frames.find(f => f.id === selectedFrameId)?.url || null; return null; };
-  const visualDataForPreview = result && result.visualData ? { ...result.visualData, templateRecommendation: selectedTemplate } : null;
-  const bodyParagraphs = editableBody.split('\n').filter(p => p.trim().length > 0);
-
-  const isActive = (type: InputType) => inputType === type;
-
-  // --- UI COMPONENTS ---
-
-  const NavButton = ({ type, label, icon: Icon }: {type: InputType, label: string, icon: any}) => (
-      <button 
-        onClick={() => {setStep('input'); setInputType(type); setIsSidebarOpen(false);}} 
-        className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${isActive(type) ? 'bg-white/10 text-white shadow-lg border border-white/10 backdrop-blur-md' : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'}`}
-      >
-          <Icon size={18} className={isActive(type) ? 'text-[#D9F99D]' : ''} /> 
-          {label}
-      </button>
+  // Render Helpers
+  const SectionHeader = ({icon, title}: {icon: any, title: string}) => (
+      <div className="flex items-center gap-2 mb-4 border-b border-white/10 pb-2">
+          {React.createElement(icon, {size: 16, className: "text-neon-lime"})}
+          <h3 className="font-serif font-bold text-lg tracking-wider text-white">{title}</h3>
+      </div>
   );
 
   return (
-    <div className="min-h-screen font-sans text-gray-200 flex overflow-hidden bg-[#0F1115]">
-      
-      {/* --- SIDEBAR (Desktop) --- */}
-      <aside className="w-64 h-screen flex-col border-r border-white/5 glass-panel z-30 hidden md:flex">
-          <div className="p-8 flex items-center gap-3 mb-4">
-              <div className="w-8 h-8 bg-gradient-to-br from-[#D9F99D] to-[#A7F3D0] rounded-lg flex items-center justify-center text-black font-bold text-xl shadow-lg shadow-green-900/20">R</div>
-              <h1 className="text-lg font-medium tracking-wide text-white/90">Rednote AI</h1>
+    <div className="min-h-screen font-sans text-gray-300 pb-20">
+      {/* Key Modal */}
+      {showKeyModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+              <div className="artifact-card p-6 w-full max-w-md rounded-none border-l-4 border-neon-lime">
+                  <h3 className="font-serif text-xl text-white mb-4">ACCESS KEY REQUIRED</h3>
+                  <input type="password" className="w-full bg-black border border-white/20 p-3 text-white font-mono mb-4 focus:border-neon-lime outline-none" placeholder="sk-..." onBlur={e => saveKey(e.target.value)} />
+                  <button onClick={() => setShowKeyModal(false)} className="w-full bg-neon-lime text-black font-bold py-3 hover:bg-white transition-colors">AUTHENTICATE</button>
+              </div>
           </div>
-          
-          <nav className="flex-1 px-4 space-y-1">
-              <p className="px-4 text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-3 mt-2">创作中心</p>
-              <NavButton type="Type A" label="视频分析" icon={Video} />
-              <NavButton type="Type B" label="文献生成" icon={FileText} />
-              <NavButton type="Type C" label="热点搜索" icon={Search} />
+      )}
 
-              <p className="px-4 text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-3 mt-8">系统设置</p>
-              <button onClick={() => setIsKeyModalOpen(true)} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-gray-400 hover:bg-white/5 hover:text-gray-200 transition-all">
-                  <Key size={18}/> <span>API 密钥</span>
+      {/* Header */}
+      <header className="sticky top-0 z-40 bg-cyber-black/90 backdrop-blur-md border-b border-white/10 px-4 py-4 flex justify-between items-center">
+          <div className="flex items-center gap-3">
+              <div className="w-8 h-8 bg-neon-lime flex items-center justify-center text-black font-black text-lg">R</div>
+              <span className="font-serif font-bold text-white tracking-widest hidden sm:block">REDNOTE.ENGINE</span>
+          </div>
+          <div className="flex gap-4">
+              <button onClick={() => setShowKeyModal(true)} className="text-xs font-mono border border-white/20 px-3 py-1 rounded hover:border-neon-lime transition-colors">
+                  {apiKey ? 'KEY_ACTIVE' : 'NO_KEY'}
               </button>
-          </nav>
-
-          <div className="p-6 border-t border-white/5">
-              <div className="flex items-center gap-3 opacity-60 hover:opacity-100 transition-opacity cursor-pointer">
-                  <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-gray-400"><User size={16}/></div>
-                  <div>
-                      <p className="text-xs font-bold text-gray-300">访客用户</p>
-                      <p className="text-[10px] text-gray-500">专业版计划</p>
-                  </div>
-              </div>
+              {step === 'result' && <button onClick={() => setStep('input')} className="text-white"><ArrowLeft/></button>}
           </div>
-      </aside>
+      </header>
 
-      {/* --- MOBILE SIDEBAR OVERLAY --- */}
-      {isSidebarOpen && (
-        <div className="fixed inset-0 z-40 md:hidden">
-            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setIsSidebarOpen(false)}></div>
-            <aside className="absolute left-0 top-0 h-full w-64 bg-[#151921] border-r border-white/10 shadow-2xl flex flex-col z-50 animate-fade-in-up">
-                <div className="p-6 flex items-center justify-between border-b border-white/5">
-                    <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-gradient-to-br from-[#D9F99D] to-[#A7F3D0] rounded-lg flex items-center justify-center text-black font-bold text-xl">R</div>
-                        <h1 className="text-lg font-medium tracking-wide text-white">Rednote AI</h1>
-                    </div>
-                    <button onClick={() => setIsSidebarOpen(false)} className="text-gray-400"><X size={20}/></button>
-                </div>
-                <nav className="flex-1 px-4 py-6 space-y-2">
-                    <NavButton type="Type A" label="视频分析" icon={Video} />
-                    <NavButton type="Type B" label="文献生成" icon={FileText} />
-                    <NavButton type="Type C" label="热点搜索" icon={Search} />
-                    <div className="h-px bg-white/5 my-4"></div>
-                    <button onClick={() => {setIsKeyModalOpen(true); setIsSidebarOpen(false)}} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-gray-400 hover:text-white">
-                        <Key size={18}/> <span>API 密钥</span>
-                    </button>
-                </nav>
-            </aside>
-        </div>
-      )}
-
-      {/* --- MAIN CONTENT --- */}
-      <main className="flex-1 h-screen overflow-y-auto relative scroll-smooth bg-gradient-to-br from-[#0F1115] to-[#13161c]">
+      <div className="max-w-7xl mx-auto p-4 lg:p-8">
         
-        {/* Top Bar */}
-        <header className="sticky top-0 z-20 px-4 md:px-8 py-4 md:py-6 flex justify-between items-center glass-panel border-b border-white/5 bg-[#0F1115]/80">
-            <div className="flex items-center gap-3">
-                <button className="md:hidden text-gray-400 hover:text-white" onClick={() => setIsSidebarOpen(true)}>
-                    <Menu size={24} />
-                </button>
-                <div>
-                    <h2 className="text-lg md:text-xl font-light tracking-wide text-white">{step === 'input' ? '仪表盘' : '创作工作室'}</h2>
-                    <p className="text-[10px] md:text-xs text-gray-500 font-mono mt-0.5 hidden sm:block">AI 爆款内容创作引擎 v2.0</p>
+        {/* === INPUT STEP === */}
+        {step === 'input' && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                
+                {/* 1. MODE SELECTION */}
+                <div className="lg:col-span-3 space-y-2">
+                    <SectionHeader icon={Layout} title="MODULE" />
+                    {[
+                        {id: 'Type A', label: 'Video Analysis', icon: Video},
+                        {id: 'Type B', label: 'Literature PDF', icon: FileText},
+                        {id: 'Type C', label: 'Trend Search', icon: Search}
+                    ].map(m => (
+                        <button 
+                            key={m.id} 
+                            onClick={() => {setInputType(m.id as InputType); setAnalysis(null); setSearchResults([])}}
+                            className={`w-full flex items-center gap-4 p-4 border transition-all duration-300 ${inputType === m.id ? 'border-neon-lime bg-neon-lime/5 text-white' : 'border-white/10 hover:border-white/30 text-gray-500'}`}
+                        >
+                            <m.icon size={20} />
+                            <span className="font-mono font-bold text-sm uppercase">{m.label}</span>
+                            {inputType === m.id && <div className="ml-auto w-2 h-2 bg-neon-lime rounded-full shadow-[0_0_10px_#ccff00]"></div>}
+                        </button>
+                    ))}
                 </div>
-            </div>
-            <div className="flex gap-3">
-                {step === 'result' && (
-                    <button onClick={() => setStep('input')} className="glass-button px-3 py-1.5 rounded-lg text-xs font-bold text-gray-300 flex items-center gap-2 hover:text-white">
-                        <ArrowLeft size={14}/> <span className="hidden sm:inline">返回</span>
-                    </button>
-                )}
-                <div className="w-8 h-8 md:w-10 md:h-10 rounded-full glass-button flex items-center justify-center text-gray-400 hover:text-white cursor-pointer"><Settings size={16}/></div>
-            </div>
-        </header>
 
-        {/* CONTENT AREA */}
-        <div className="px-4 md:px-8 py-6 md:py-8 pb-24 max-w-7xl mx-auto">
-            
-            {/* === INPUT STEP === */}
-            {step === 'input' && (
-                <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 animate-fade-in-up">
+                {/* 2. INPUT AREA */}
+                <div className="lg:col-span-5 space-y-6">
+                    <SectionHeader icon={Zap} title="DATA INGESTION" />
                     
-                    {/* LEFT COL: Main Input */}
-                    <div className="xl:col-span-2 space-y-6">
-                        
-                        {/* Welcome Banner */}
-                        <div className="glass-panel rounded-3xl p-6 md:p-8 relative overflow-hidden group">
-                            <div className="absolute top-0 right-0 w-64 h-64 bg-[#D9F99D] blur-[100px] opacity-10 rounded-full group-hover:opacity-20 transition-opacity duration-700"></div>
-                            <div className="relative z-10 flex justify-between items-end">
-                                <div className="w-full">
-                                    <h3 className="text-xl md:text-2xl font-light text-white mb-2 tracking-tight">开始创作</h3>
-                                    <p className="text-gray-400 text-xs md:text-sm max-w-md font-light">使用 Gemini 3 Pro Preview 进行深度分析和爆款内容生成。</p>
-                                    <button onClick={handleGenerate} disabled={isLoading} className="mt-6 md:mt-8 bg-[#D9F99D] text-black w-full md:w-auto px-6 py-3 rounded-xl font-bold text-xs tracking-wide flex items-center justify-center gap-2 hover:shadow-[0_0_20px_rgba(217,249,157,0.4)] transition-all disabled:opacity-50 disabled:cursor-not-allowed uppercase">
-                                        {isLoading ? <Loader2 className="animate-spin" size={16}/> : <Sparkles size={16}/>}
-                                        生成爆款笔记
-                                    </button>
+                    <div className="artifact-card p-6 min-h-[300px] flex flex-col gap-4">
+                        {/* Type A: Video */}
+                        {inputType === 'Type A' && (
+                            <>
+                                <input className="w-full bg-black border border-white/20 p-4 text-white font-mono text-sm focus:border-neon-lime outline-none" placeholder="> Paste Video URL (YouTube/Bilibili)" value={videoUrlInput} onChange={e => setVideoUrlInput(e.target.value)} />
+                                <div className="relative border border-dashed border-white/20 p-8 text-center hover:border-white/50 transition-colors">
+                                    <input type="file" accept="video/*" className="absolute inset-0 opacity-0 cursor-pointer" onChange={(e) => handleFile(e, 'video')} />
+                                    <Upload className="mx-auto mb-2 text-gray-500"/>
+                                    <p className="text-xs font-mono text-gray-500">{videoFile ? videoFile.name : "OR UPLOAD LOCAL VIDEO FILE"}</p>
                                 </div>
-                                <div className="hidden sm:block text-[#D9F99D] opacity-20">
-                                    <Zap size={64} strokeWidth={1} />
-                                </div>
-                            </div>
-                        </div>
+                            </>
+                        )}
 
-                        {/* Input Widget */}
-                        <div className="glass-panel rounded-3xl p-6 md:p-8">
-                             <div className="flex justify-between items-center mb-6 md:mb-8 border-b border-white/5 pb-4">
-                                 <h3 className="text-sm font-bold text-gray-300 uppercase tracking-widest flex items-center gap-2">
-                                     {inputType === 'Type A' ? <Video size={16} className="text-purple-400"/> : inputType === 'Type B' ? <FileText size={16} className="text-blue-400"/> : <Search size={16} className="text-green-400"/>}
-                                     {inputType === 'Type A' ? '视频来源' : inputType === 'Type B' ? '文档来源' : '话题搜索'}
-                                 </h3>
-                                 <span className="text-[10px] font-bold bg-white/5 px-2 py-1 rounded border border-white/10 text-gray-500">步骤 1</span>
+                        {/* Type B: PDF */}
+                        {inputType === 'Type B' && (
+                             <div className="h-full flex flex-col justify-center relative border border-dashed border-white/20 p-8 text-center hover:border-neon-lime transition-colors group">
+                                 <input type="file" accept="application/pdf" className="absolute inset-0 opacity-0 cursor-pointer" onChange={(e) => handleFile(e, 'pdf')} />
+                                 <FileText size={48} className="mx-auto mb-4 text-gray-600 group-hover:text-neon-lime transition-colors"/>
+                                 <p className="font-serif text-xl text-white mb-2">{pdfFile ? "PDF LOADED" : "DROP PDF"}</p>
+                                 <p className="font-mono text-xs text-gray-500">{pdfFile ? pdfFile.name : "Academic Papers / Reports"}</p>
                              </div>
+                        )}
 
-                             {/* INPUT FORMS */}
-                             {inputType === 'Type A' && (
-                                 <div className="space-y-6">
-                                     <div className="flex gap-4 flex-col sm:flex-row">
-                                         <div className="flex-1 relative">
-                                             <LinkIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
-                                             <input 
-                                                 className="w-full pl-11 pr-4 py-4 glass-input rounded-xl text-sm font-light placeholder-gray-600"
-                                                 placeholder="粘贴视频链接 (B站/YouTube)..."
-                                                 value={videoUrlInput}
-                                                 onChange={(e) => setVideoUrlInput(e.target.value)}
-                                             />
-                                         </div>
-                                         <div className="relative group h-12 sm:h-auto">
-                                             <input type="file" accept="video/*" onChange={handleVideoUpload} className="absolute inset-0 opacity-0 cursor-pointer w-full h-full z-10" />
-                                             <button className="w-full h-full px-6 glass-button rounded-xl font-bold text-xs text-gray-300 hover:text-white flex items-center justify-center gap-2 whitespace-nowrap">
-                                                 <Upload size={16}/> 上传文件
-                                             </button>
-                                         </div>
-                                     </div>
-                                     {frames.length > 0 && (
-                                         <div className="grid grid-cols-4 sm:grid-cols-6 gap-2 pt-2">
-                                             {frames.map(frame => (
-                                                 <div key={frame.id} onClick={() => setSelectedFrameId(selectedFrameId === frame.id ? null : frame.id)} className={`aspect-video rounded-lg overflow-hidden cursor-pointer relative transition-all border ${selectedFrameId === frame.id ? 'border-[#D9F99D] shadow-[0_0_10px_rgba(217,249,157,0.3)]' : 'border-transparent opacity-50 hover:opacity-100'}`}>
-                                                     <img src={frame.url} className="w-full h-full object-cover" />
-                                                 </div>
-                                             ))}
-                                         </div>
-                                     )}
-                                 </div>
-                             )}
-
-                             {inputType === 'Type B' && (
-                                 <div className="border border-dashed border-white/20 rounded-2xl p-8 md:p-10 text-center hover:border-blue-400/50 hover:bg-blue-900/10 transition-all cursor-pointer relative group">
-                                     <input type="file" accept="application/pdf" onChange={handlePdfUpload} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
-                                     <div className="w-12 h-12 bg-blue-500/20 text-blue-400 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
-                                         <FileText size={20}/>
-                                     </div>
-                                     <h4 className="font-medium text-gray-200 mb-1">{pdfFile ? pdfFile.name : "点击上传 PDF"}</h4>
-                                     <p className="text-xs text-gray-500 font-mono">支持学术论文、研报等</p>
-                                 </div>
-                             )}
-
-                             {inputType === 'Type C' && (
-                                 <div className="space-y-4">
-                                     <div className="flex gap-2 mb-2 overflow-x-auto pb-1 no-scrollbar">
-                                         {(['google', 'x'] as SearchSource[]).map(s => (
-                                             <button key={s} onClick={() => toggleSource(s)} className={`px-3 py-1.5 rounded-lg text-[10px] font-bold border uppercase tracking-wider transition-all flex items-center gap-2 ${searchSources.includes(s) ? 'bg-white text-black border-white' : 'glass-button text-gray-500 border-white/10'}`}>
-                                                 {s === 'x' ? <Twitter size={12}/> : <Globe size={12}/>} {s.toUpperCase()}
-                                             </button>
-                                         ))}
-                                     </div>
-                                     <div className="relative">
-                                         <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
-                                         <input 
-                                             className="w-full pl-11 pr-32 py-4 glass-input rounded-xl text-sm font-light placeholder-gray-600"
-                                             placeholder="搜索话题或粘贴文章链接..."
-                                             value={inputText || customSearchSource}
-                                             onChange={(e) => {
-                                                 if (e.target.value.startsWith('http')) setCustomSearchSource(e.target.value);
-                                                 else setInputText(e.target.value);
-                                             }}
-                                             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                                         />
-                                         <button onClick={handleSearch} disabled={isSearching} className="absolute right-2 top-2 bottom-2 px-4 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-bold border border-white/10 transition-colors disabled:opacity-50">
-                                             {isSearching ? <Loader2 className="animate-spin" size={14}/> : '搜索'}
-                                         </button>
-                                     </div>
-                                     
-                                     {/* Search Results */}
-                                     {searchResults.length > 0 && (
-                                         <div className="space-y-2 mt-6">
-                                             {searchResults.map(res => (
-                                                 <div key={res.id} onClick={() => toggleResultSelection(res.id)} className={`p-4 rounded-xl border flex gap-4 cursor-pointer transition-all hover:bg-white/5 ${selectedResultIds.has(res.id) ? 'border-[#D9F99D]/50 bg-[#D9F99D]/5' : 'border-white/5 bg-black/20'}`}>
-                                                     <div className={`w-5 h-5 rounded-full border flex items-center justify-center flex-shrink-0 mt-0.5 ${selectedResultIds.has(res.id) ? 'border-[#D9F99D] bg-[#D9F99D] text-black' : 'border-gray-600'}`}>
-                                                         {selectedResultIds.has(res.id) && <Check size={10} strokeWidth={4}/>}
-                                                     </div>
-                                                     <div>
-                                                         <h4 className={`font-medium text-sm line-clamp-1 ${selectedResultIds.has(res.id) ? 'text-[#D9F99D]' : 'text-gray-300'}`}>{res.title}</h4>
-                                                         <p className="text-xs text-gray-500 mt-1 line-clamp-2 font-light">{res.snippet}</p>
-                                                         {res.imageUrl && <div className="mt-2 text-[9px] text-blue-400 flex items-center gap-1 opacity-80"><ImageIcon size={10}/> 包含图片</div>}
-                                                     </div>
-                                                 </div>
-                                             ))}
-                                         </div>
-                                     )}
-                                 </div>
-                             )}
-                        </div>
-                    </div>
-
-                    {/* RIGHT COL: Analysis & Settings */}
-                    <div className="space-y-6">
-                        
-                        {/* Analysis Widget */}
-                        <div className="glass-panel rounded-3xl p-6 relative overflow-hidden min-h-[200px]">
-                            <div className="flex justify-between items-center mb-4 border-b border-white/5 pb-3">
-                                <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest">智能分析</h3>
-                                { (videoFile || pdfFile || videoUrlInput) && (
-                                    <button onClick={handleAnalyze} disabled={isAnalyzing} className="text-[#D9F99D] hover:text-white transition-colors disabled:opacity-50">
-                                        {isAnalyzing ? <Loader2 className="animate-spin" size={16}/> : <PlayCircle size={18}/>}
+                        {/* Type C: Search */}
+                        {inputType === 'Type C' && (
+                            <div className="flex flex-col h-full">
+                                <div className="flex gap-2 mb-4">
+                                    {['google', 'x'].map(s => (
+                                        <button key={s} onClick={() => setSearchSources(prev => prev.includes(s as any) ? prev.filter(x=>x!==s) : [...prev, s as any])} className={`px-3 py-1 text-xs font-mono border ${searchSources.includes(s as any) ? 'bg-white text-black border-white' : 'border-white/20 text-gray-500'}`}>{s.toUpperCase()}</button>
+                                    ))}
+                                </div>
+                                <div className="flex gap-2 mb-4">
+                                    <input className="flex-1 bg-black border border-white/20 p-3 text-white font-mono text-sm focus:border-neon-lime outline-none" placeholder="> Enter keywords..." value={inputText} onChange={e => setInputText(e.target.value)} onKeyDown={e => e.key === 'Enter' && doSearch()} />
+                                    <button onClick={doSearch} disabled={isSearching} className="bg-white text-black px-6 font-bold hover:bg-neon-lime transition-colors disabled:opacity-50">
+                                        {isSearching ? <Loader2 className="animate-spin"/> : <Search/>}
                                     </button>
-                                )}
-                            </div>
-                            
-                            {analysisResult ? (
-                                <div className="space-y-4 text-sm animate-fade-in">
-                                    <div className="bg-black/20 p-4 rounded-xl border border-white/5">
-                                        <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">摘要</p>
-                                        <p className="text-gray-300 font-light leading-relaxed text-xs">{analysisResult.summary}</p>
-                                    </div>
-                                    <div className="bg-black/20 p-4 rounded-xl border border-white/5">
-                                        <p className="text-[10px] text-gray-500 uppercase font-bold mb-2">核心要点</p>
-                                        <ul className="list-none space-y-2 text-gray-400 text-xs font-light">
-                                            {analysisResult.corePoints.slice(0,3).map((p, i) => <li key={i} className="flex gap-2"><span className="text-[#D9F99D]">•</span>{p}</li>)}
-                                        </ul>
-                                    </div>
                                 </div>
-                            ) : (
-                                <div className="h-32 flex flex-col items-center justify-center text-gray-600 text-center">
-                                    <BarChart2 size={24} className="mb-2 opacity-30"/>
-                                    <p className="text-[10px] uppercase tracking-widest">暂无数据</p>
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Tone Selector */}
-                        <div className="glass-panel rounded-3xl p-6">
-                            <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">文案风格</h3>
-                            <div className="grid grid-cols-2 gap-2">
-                                <button onClick={() => setSelectedTone('emotional')} className={`px-3 py-2.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all border ${selectedTone === 'emotional' ? 'bg-white text-black border-white' : 'glass-button text-gray-500 border-white/5 hover:text-gray-300'}`}>😭 情感共鸣</button>
-                                <button onClick={() => setSelectedTone('professional')} className={`px-3 py-2.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all border ${selectedTone === 'professional' ? 'bg-white text-black border-white' : 'glass-button text-gray-500 border-white/5 hover:text-gray-300'}`}>🎓 干货科普</button>
-                                <button onClick={() => setSelectedTone('speed')} className={`px-3 py-2.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all border ${selectedTone === 'speed' ? 'bg-white text-black border-white' : 'glass-button text-gray-500 border-white/5 hover:text-gray-300'}`}>⚡ 速递新闻</button>
-                                <button onClick={() => setSelectedTone('humorous')} className={`px-3 py-2.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all border ${selectedTone === 'humorous' ? 'bg-white text-black border-white' : 'glass-button text-gray-500 border-white/5 hover:text-gray-300'}`}>🤣 幽默吐槽</button>
-                                <button onClick={() => setSelectedTone('imitate')} className={`col-span-2 px-3 py-2.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all border ${selectedTone === 'imitate' ? 'bg-purple-500 text-white border-purple-500' : 'glass-button text-purple-400 border-purple-500/30 hover:border-purple-500'}`}>
-                                    🤖 模仿爆款
-                                </button>
-                            </div>
-                            {selectedTone === 'imitate' && (
-                                <textarea 
-                                    className="w-full mt-3 p-3 glass-input rounded-lg text-xs resize-none font-mono text-gray-300"
-                                    rows={3}
-                                    placeholder="在此粘贴你想模仿的爆款文案..."
-                                    value={imitateText}
-                                    onChange={e => setImitateText(e.target.value)}
-                                />
-                            )}
-                        </div>
-
-                    </div>
-                </div>
-            )}
-
-            {/* === RESULT STEP === */}
-            {step === 'result' && result && (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-fade-in-up">
-                    
-                    {/* LEFT COL: Visuals */}
-                    <div className="lg:col-span-5 space-y-6 order-2 lg:order-1">
-                        <div className="glass-panel p-6 rounded-[2rem] relative">
-                            <div className="absolute top-4 right-4 z-10 bg-black/50 backdrop-blur-md px-3 py-1 rounded-full border border-white/10 text-[10px] font-bold text-white/80 uppercase">
-                                预览
-                            </div>
-                            <Suspense fallback={<div className="aspect-[3/4] bg-white/5 animate-pulse rounded-xl"/>}>
-                                {visualDataForPreview && (
-                                    <div className="transform scale-95 hover:scale-100 transition-transform duration-500">
-                                        <VisualCard 
-                                            data={visualDataForPreview} 
-                                            backgroundImage={getVisualBackground()} 
-                                            coverTextOverride={editableCoverText} 
-                                            coverSubOverride={editableCoverSub}
-                                            pointsOverride={editablePoints}
-                                            coverFontSize={coverFontSize} 
-                                        />
-                                    </div>
-                                )}
-                            </Suspense>
-                            
-                            {/* Controls */}
-                            <div className="mt-8 space-y-4 border-t border-white/5 pt-6">
-                                 <div className="flex gap-2">
-                                     <button onClick={() => document.getElementById('cover-upload')?.click()} className="flex-1 py-3 glass-button text-gray-300 text-xs font-bold rounded-xl flex items-center justify-center gap-2 hover:text-white">
-                                         <ImageIcon size={14}/> 更换封面
-                                         <input id="cover-upload" type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
-                                     </button>
-                                     <button onClick={handleRandomImage} className="px-4 glass-button text-purple-400 rounded-xl flex items-center hover:text-purple-300"><Dice5 size={18}/></button>
-                                 </div>
-                                 
-                                 <div className="bg-black/20 p-4 rounded-xl space-y-3 border border-white/5">
-                                     <div className="flex justify-between items-center">
-                                         <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">封面文字</label>
-                                         <button onClick={onRegenerateCoverTitle} className="text-[10px] text-purple-400 font-bold hover:text-purple-300 flex items-center gap-1">{isRegeneratingCover ? <Loader2 size={10} className="animate-spin"/> : <Wand2 size={10}/>} AI 优化</button>
-                                     </div>
-                                     <input value={editableCoverText} onChange={e => setEditableCoverText(e.target.value)} className="w-full bg-transparent border-b border-white/10 py-1 text-sm font-bold text-white outline-none focus:border-purple-500 transition-colors placeholder-gray-600" placeholder="主标题" />
-                                     <input value={editableCoverSub} onChange={e => setEditableCoverSub(e.target.value)} className="w-full bg-transparent border-b border-white/10 py-1 text-xs text-gray-400 outline-none focus:border-purple-500 transition-colors placeholder-gray-700" placeholder="副标题 (可选，清空即删除)" />
-                                     
-                                     {/* Points List Editor */}
-                                     <div className="space-y-2 mt-2">
-                                         <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">核心亮点</label>
-                                         {editablePoints.map((p, idx) => (
-                                            <div key={idx} className="flex gap-2 group">
-                                                <input value={p} onChange={(e) => updatePoint(idx, e.target.value)} className="flex-1 bg-transparent border-b border-white/5 text-[10px] text-gray-400 focus:text-white focus:border-white/20 outline-none py-1" />
-                                                <button onClick={() => removePoint(idx)} className="text-gray-700 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={12}/></button>
+                                {/* Search Results List - Dense & Artifact Style */}
+                                <div className="flex-1 overflow-y-auto border-t border-white/10 pt-2 space-y-2 pr-2">
+                                    {searchResults.map(res => (
+                                        <div key={res.id} className="group p-3 border border-white/5 hover:border-neon-lime/50 bg-white/5 transition-all cursor-default">
+                                            <div className="flex justify-between items-start mb-1">
+                                                <span className="text-[10px] font-mono text-neon-lime">{res.source.toUpperCase()}</span>
+                                                <span className="text-[10px] text-gray-500 flex items-center gap-1"><Clock size={10}/> {res.date || 'N/A'}</span>
                                             </div>
-                                         ))}
-                                         <button onClick={addPoint} className="w-full py-2 border border-dashed border-white/10 rounded-lg text-[10px] text-gray-500 hover:text-gray-300 hover:border-white/20 flex items-center justify-center gap-1 transition-all"><Plus size={10}/> 添加亮点</button>
-                                     </div>
-
-                                     <div className="flex justify-between mt-4 items-center pt-2 border-t border-white/5">
-                                         <label className="text-[10px] font-bold text-gray-500 uppercase">字号</label>
-                                         <input type="range" min="0.5" max="3" step="0.1" value={coverFontSize} onChange={e => setCoverFontSize(parseFloat(e.target.value))} className="w-24 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-white" />
-                                     </div>
-                                 </div>
-                                 
-                                 <div className="grid grid-cols-4 gap-2">
-                                    {['apple_note', 'memo', 'literature', 'magazine', 'notification', 'receipt', 'polaroid', 'chat'].map(t => (
-                                        <button key={t} onClick={() => setSelectedTemplate(t as VisualTemplate)} className={`py-2 text-[8px] font-bold uppercase rounded-lg border transition-all ${selectedTemplate === t ? 'bg-white text-black border-white' : 'glass-button text-gray-500 border-white/5 hover:text-gray-300'}`}>
-                                            {t.split('_')[0]}
-                                        </button>
+                                            <a href={res.url} target="_blank" className="font-bold text-sm text-white hover:underline line-clamp-1 mb-1 flex items-center gap-2">
+                                                {res.title} <ExternalLink size={10} className="text-gray-600"/>
+                                            </a>
+                                            <p className="text-xs text-gray-400 line-clamp-2 font-mono">{res.snippet}</p>
+                                        </div>
                                     ))}
-                                 </div>
+                                </div>
                             </div>
-                        </div>
+                        )}
                     </div>
+                    
+                    {/* ANALYZE ACTION */}
+                    <button 
+                        onClick={doAnalyze} 
+                        disabled={isAnalyzing || (!videoUrlInput && !videoFile && !pdfFile && searchResults.length === 0)}
+                        className="w-full py-4 bg-white/5 border border-white/20 hover:bg-white/10 hover:border-neon-lime text-white font-serif font-bold tracking-widest flex items-center justify-center gap-3 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                        {isAnalyzing ? <Loader2 className="animate-spin"/> : <BrainCircuit/>}
+                        START INTELLIGENT ANALYSIS
+                    </button>
+                </div>
 
-                    <div className="lg:col-span-7 space-y-6 order-1 lg:order-2">
-                        {/* Titles */}
-                        <div className="glass-panel p-6 rounded-[2rem]">
-                            <div className="flex justify-between items-center mb-4">
-                                <h3 className="text-sm font-bold text-gray-300 uppercase tracking-widest">爆款标题库</h3>
-                                <button onClick={onRegenerateTitles} disabled={isRegeneratingTitle} className="text-[10px] bg-white/10 text-white px-3 py-1.5 rounded-lg hover:bg-white/20 flex items-center gap-1 transition-colors border border-white/10">
-                                    {isRegeneratingTitle ? <Loader2 size={10} className="animate-spin"/> : <RefreshCw size={10}/>} 换一批
-                                </button>
-                            </div>
-                            <div className="space-y-2">
-                                {result.content.titles_options?.map((t, i) => (
-                                    <div key={i} onClick={() => setEditableTitle(t)} className={`p-4 rounded-xl border cursor-pointer transition-all flex items-center gap-3 group ${editableTitle === t ? 'border-[#D9F99D]/50 bg-[#D9F99D]/5' : 'border-white/5 bg-black/20 hover:bg-black/40'}`}>
-                                        <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${editableTitle === t ? 'border-[#D9F99D] text-[#D9F99D]' : 'border-gray-600 group-hover:border-gray-400'}`}>
-                                            {editableTitle === t && <div className="w-2 h-2 bg-[#D9F99D] rounded-full"/>}
-                                        </div>
-                                        <span className={`text-sm font-medium ${editableTitle === t ? 'text-[#D9F99D]' : 'text-gray-400 group-hover:text-gray-200'}`}>{t}</span>
+                {/* RIGHT COL: Analysis Report & Generate */}
+                <div className="lg:col-span-4 space-y-6">
+                    <SectionHeader icon={BarChart2} title="ANALYSIS REPORT" />
+                    
+                    <div className="artifact-card p-6 min-h-[400px] flex flex-col relative">
+                        {analysis ? (
+                            <div className="animate-fade-in h-full flex flex-col">
+                                <div className="mb-6">
+                                    <p className="font-mono text-xs text-neon-lime mb-2">// SUMMARY</p>
+                                    <p className="text-sm leading-relaxed text-gray-200">{analysis.summary}</p>
+                                </div>
+                                <div className="flex-1">
+                                    <p className="font-mono text-xs text-neon-lime mb-2">// CORE POINTS</p>
+                                    <ul className="space-y-3">
+                                        {analysis.corePoints.map((p, i) => (
+                                            <li key={i} className="flex gap-3 text-xs border-l border-white/20 pl-3">
+                                                <span className="text-gray-500 font-mono">0{i+1}</span>
+                                                <span className="text-gray-300">{p}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                                
+                                {/* Generate Action */}
+                                <div className="mt-6 pt-6 border-t border-white/10">
+                                    <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
+                                        {(['emotional', 'professional', 'speed', 'humorous'] as RednoteTone[]).map(t => (
+                                            <button key={t} onClick={() => setTone(t)} className={`px-3 py-1 text-[10px] font-mono border uppercase ${tone===t ? 'bg-neon-lime text-black border-neon-lime' : 'border-white/20 text-gray-500'}`}>{t}</button>
+                                        ))}
                                     </div>
-                                ))}
+                                    <button onClick={doGenerate} disabled={isGenerating} className="w-full bg-neon-lime text-black font-black py-4 text-sm uppercase tracking-widest hover:scale-[1.02] transition-transform disabled:opacity-50 flex justify-center gap-2 items-center shadow-[0_0_20px_rgba(204,255,0,0.2)]">
+                                        {isGenerating ? <Loader2 className="animate-spin"/> : <Sparkles/>}
+                                        GENERATE VIRAL COPY
+                                    </button>
+                                </div>
                             </div>
-                        </div>
+                        ) : (
+                            <div className="absolute inset-0 flex items-center justify-center text-center opacity-30">
+                                <div>
+                                    <div className="w-16 h-16 border-2 border-dashed border-white rounded-full flex items-center justify-center mx-auto mb-4 animate-spin-slow">
+                                        <RefreshCw/>
+                                    </div>
+                                    <p className="font-mono text-xs">WAITING FOR ANALYSIS...</p>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
 
-                        {/* Editor */}
-                        <div className="glass-panel p-6 rounded-[2rem] flex-1 flex flex-col min-h-[500px]">
-                            <div className="flex justify-between items-center mb-6 border-b border-white/5 pb-4">
-                                <div className="flex gap-2">
-                                    <button onClick={() => setShowAskModal(true)} className="glass-button px-3 py-1.5 rounded-lg text-[10px] font-bold text-blue-400 flex items-center gap-1 hover:bg-blue-500/10 hover:border-blue-500/30"><MessageSquare size={12}/> 问 AI</button>
-                                    <button onClick={() => setShowRewriteModal(true)} className="glass-button px-3 py-1.5 rounded-lg text-[10px] font-bold text-purple-400 flex items-center gap-1 hover:bg-purple-500/10 hover:border-purple-500/30"><Wand2 size={12}/> 全文重写</button>
-                                </div>
-                                <button onClick={() => {navigator.clipboard.writeText(`${editableTitle}\n\n${editableBody}`); setCopied(true); setTimeout(()=>setCopied(false),2000)}} className="text-[10px] font-bold text-gray-500 hover:text-white flex items-center gap-1 transition-colors">
-                                    {copied ? <Check size={12} className="text-green-400"/> : <Copy size={12}/>} 复制正文
-                                </button>
-                            </div>
-                            
-                            <input value={editableTitle} onChange={e => setEditableTitle(e.target.value)} className="text-xl md:text-2xl font-bold text-white bg-transparent outline-none mb-6 placeholder-gray-700" placeholder="点击编辑标题..." />
-                            
-                            <div className="flex-1 relative">
-                                <div className="w-full h-full outline-none text-gray-300 leading-8 text-sm md:text-base font-light" contentEditable suppressContentEditableWarning onBlur={e => setEditableBody(e.currentTarget.innerText)}>
-                                    {bodyParagraphs.map((p, i) => (
-                                        <div key={i} className="group relative mb-6 hover:bg-white/5 rounded px-2 py-1 -mx-2 transition-colors border border-transparent hover:border-white/5">
-                                            {rewritingIndex === i ? <div className="flex gap-2 text-purple-400 text-sm items-center py-2"><Loader2 className="animate-spin" size={14}/> AI 重写中...</div> : <p>{p}</p>}
-                                            <button onClick={() => onRegenerateParagraph(p, i)} className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 p-2 text-gray-500 hover:text-purple-400 transition-opacity"><RefreshCw size={14}/></button>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
+            </div>
+        )}
+
+        {/* === RESULT STEP === */}
+        {step === 'result' && result && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 animate-fade-in">
+                
+                {/* Visual Editor */}
+                <div className="space-y-6">
+                    <SectionHeader icon={ImageIcon} title="VISUAL ARTIFACT" />
+                    <div className="flex justify-center bg-[#111] p-8 rounded-lg border border-white/5 relative">
+                         <Suspense fallback={<div className="w-full aspect-[3/4] bg-white/5 animate-pulse"/>}>
+                             <div className="scale-90 sm:scale-100 origin-top">
+                                 <VisualCard 
+                                    data={{...result.visualData, templateRecommendation: template}} 
+                                    backgroundImage={coverImg} 
+                                    coverTextOverride={editCoverMain}
+                                    coverSubOverride={editCoverSub}
+                                    coverFontSize={fontSize}
+                                />
+                             </div>
+                         </Suspense>
+                    </div>
+                    
+                    {/* Visual Controls */}
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="artifact-card p-4">
+                            <label className="font-mono text-[10px] text-gray-500 block mb-2">COVER TEXT</label>
+                            <input value={editCoverMain} onChange={e => setEditCoverMain(e.target.value)} className="w-full bg-black border border-white/10 p-2 text-sm text-white font-bold mb-2 outline-none focus:border-neon-lime" />
+                            <input value={editCoverSub} onChange={e => setEditCoverSub(e.target.value)} className="w-full bg-black border border-white/10 p-2 text-xs text-gray-400 outline-none focus:border-neon-lime" placeholder="Subtitle" />
+                        </div>
+                        <div className="artifact-card p-4">
+                             <label className="font-mono text-[10px] text-gray-500 block mb-2">STYLE & SIZE</label>
+                             <input type="range" min="0.5" max="3" step="0.1" value={fontSize} onChange={e => setFontSize(parseFloat(e.target.value))} className="w-full accent-neon-lime mb-4 h-1 bg-gray-700 appearance-none rounded-full" />
+                             <div className="flex gap-1 flex-wrap">
+                                 {['apple_note', 'memo', 'literature', 'magazine', 'receipt'].map(t => (
+                                     <button key={t} onClick={() => setTemplate(t as VisualTemplate)} className={`w-6 h-6 rounded-full border ${template===t ? 'bg-neon-lime border-neon-lime' : 'border-white/20 bg-transparent'}`}></button>
+                                 ))}
+                             </div>
                         </div>
                     </div>
                 </div>
-            )}
 
-        </div>
-      </main>
+                {/* Content Editor */}
+                <div className="space-y-6">
+                    <SectionHeader icon={PenTool} title="COPYWRITING" />
+                    
+                    <div className="artifact-card p-6 h-[calc(100vh-200px)] flex flex-col">
+                         {/* Title Options */}
+                         <div className="flex gap-2 overflow-x-auto pb-4 mb-4 border-b border-white/10">
+                             {result.content.titles_options.map((t, i) => (
+                                 <button key={i} onClick={() => setEditTitle(t)} className={`whitespace-nowrap px-4 py-2 text-xs font-bold border transition-all ${editTitle === t ? 'bg-white text-black border-white' : 'border-white/20 text-gray-400 hover:text-white'}`}>
+                                     {t}
+                                 </button>
+                             ))}
+                         </div>
 
-      {/* MODALS */}
-      {isKeyModalOpen && (
-          <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center backdrop-blur-sm p-4">
-              <div className="glass-panel bg-[#1A1A1A] rounded-2xl p-8 w-full max-w-md shadow-2xl border border-white/10">
-                  <h3 className="text-lg font-bold text-white mb-6">设置</h3>
-                  <label className="text-xs font-bold text-gray-500 uppercase mb-2 block">Gemini API 密钥</label>
-                  <input type="password" className="w-full p-4 glass-input rounded-xl text-sm mb-6 font-mono" placeholder="AIzaSy..." value={tempKey} onChange={e => setTempKey(e.target.value)} />
-                  <div className="flex gap-3">
-                      <button onClick={() => setIsKeyModalOpen(false)} className="flex-1 py-3 glass-button rounded-xl text-sm font-bold text-gray-400 hover:text-white">取消</button>
-                      <button onClick={saveApiKey} className="flex-1 py-3 bg-white text-black rounded-xl text-sm font-bold hover:bg-gray-200 transition-colors">保存</button>
-                  </div>
-              </div>
-          </div>
-      )}
-      
-      {showRewriteModal && (
-          <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-              <div className="glass-panel bg-[#1A1A1A] rounded-2xl p-8 w-full max-w-md border border-white/10">
-                  <h3 className="font-bold text-white mb-4">全文重写要求</h3>
-                  <textarea className="w-full p-4 glass-input rounded-xl h-32 mb-6 resize-none focus:border-purple-500/50 text-sm" placeholder="例如：更幽默一点，增加 emoji，强调性价比..." value={rewriteInstruction} onChange={e => setRewriteInstruction(e.target.value)} />
-                  <div className="flex justify-end gap-3">
-                      <button onClick={() => setShowRewriteModal(false)} className="px-4 py-2 text-gray-500 hover:text-white font-bold text-xs">取消</button>
-                      <button onClick={onRegenerateBody} className="px-6 py-2 bg-purple-600 text-white rounded-xl font-bold text-xs hover:bg-purple-500">开始重写</button>
-                  </div>
-              </div>
-          </div>
-      )}
+                         <input value={editTitle} onChange={e => setEditTitle(e.target.value)} className="text-2xl font-serif font-black bg-transparent outline-none text-white mb-6" />
+                         
+                         <textarea 
+                            value={editBody} 
+                            onChange={e => setEditBody(e.target.value)} 
+                            className="flex-1 bg-transparent outline-none text-gray-300 text-sm leading-relaxed font-mono resize-none" 
+                         />
 
-      {showAskModal && (
-           <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-              <div className="glass-panel bg-[#1A1A1A] rounded-2xl p-6 w-full max-w-lg border border-white/10">
-                  <div className="flex justify-between items-center mb-6">
-                      <h3 className="font-bold text-white flex items-center gap-2"><BrainCircuit className="text-blue-400"/> 问 AI</h3>
-                      <button onClick={() => setShowAskModal(false)} className="text-gray-500 hover:text-white"><X size={18}/></button>
-                  </div>
-                  <div className="bg-black/30 p-4 rounded-xl text-xs text-gray-400 max-h-32 overflow-y-auto mb-4 border border-white/5">
-                      {editableBody}
-                  </div>
-                  {askAnswer && <div className="bg-blue-500/10 p-4 rounded-xl text-sm text-blue-200 mb-4 border border-blue-500/20 leading-relaxed">{askAnswer}</div>}
-                  <div className="flex gap-2">
-                      <input className="flex-1 p-3 glass-input rounded-xl text-sm focus:border-blue-500/50" placeholder="针对内容提问..." value={askQuestion} onChange={e => setAskQuestion(e.target.value)} onKeyDown={e => e.key === 'Enter' && onAskAI()} />
-                      <button onClick={onAskAI} disabled={isAsking} className="px-4 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-500 disabled:opacity-50">{isAsking ? <Loader2 className="animate-spin" size={18}/> : <ArrowLeft className="rotate-180" size={18}/>}</button>
-                  </div>
-              </div>
-           </div>
-      )}
+                         <div className="flex justify-end pt-4 border-t border-white/10 gap-4">
+                             <button className="text-xs font-bold text-neon-lime uppercase flex items-center gap-2 hover:text-white"><Wand2 size={14}/> Rewrite</button>
+                             <button onClick={() => navigator.clipboard.writeText(`${editTitle}\n\n${editBody}`)} className="bg-white text-black px-6 py-2 font-bold text-xs hover:bg-gray-200">COPY ALL</button>
+                         </div>
+                    </div>
+                </div>
 
+            </div>
+        )}
+
+      </div>
     </div>
   );
 };

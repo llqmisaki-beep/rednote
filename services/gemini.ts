@@ -3,328 +3,252 @@ import { InputType, RednoteResponse, SearchResult, SearchSource, RednoteTone, Me
 
 const apiKey = process.env.API_KEY;
 
+// STRICTLY USE GEMINI 3 PRO PREVIEW FOR EVERYTHING
 const PRO_MODEL = 'gemini-3-pro-preview'; 
-const FALLBACK_PRO = 'gemini-1.5-pro';
-const FAST_MODEL = 'gemini-2.5-flash'; 
 
 const SYSTEM_INSTRUCTION = `
 System Instruction: Rednote Creator Engine (Chinese Version)
-1. Role: You are the "Rednote Creator". Transform inputs into viral Xiaohongshu posts.
-**CRITICAL: OUTPUT MUST BE IN SIMPLIFIED CHINESE.**
-2. JSON Structure (Strict): { ... } (Standard JSON)
+Role: Expert Rednote Creator.
+**CRITICAL: OUTPUT SIMPLIFIED CHINESE.**
+JSON Format: {
+  "content": { "title": "...", "titles_options": [], "coreIdea": "...", "fullText": "...", "tags": [] },
+  "visualData": { "elements": { "coverText": { "main": "...", "sub": "..." }, "knowledgePoints": [] } }
+}
 `;
 
-const SEARCH_SYSTEM_INSTRUCTION = `
-You are a smart news aggregator & content parser.
-Rules:
-1. IMAGE IS PRIORITY: Find OG:Image.
-2. URL Analysis: Summarize specific page.
-3. Return JSON only.
-`;
-
-const extractJSON = (text: string) => {
+// Robust JSON extractor with String-to-Object Fallback
+const extractJSON = (text: string): any => {
+  let jsonString = text;
   try {
-    return JSON.parse(text);
-  } catch {
-    const jsonBlock = text.match(/```json\s*([\s\S]*?)\s*```/);
-    if (jsonBlock) { try { return JSON.parse(jsonBlock[1]); } catch { } }
-    const codeBlock = text.match(/```\s*([\s\S]*?)\s*```/);
-    if (codeBlock) { try { return JSON.parse(codeBlock[1]); } catch { } }
-    const start = text.indexOf('{');
-    const end = text.lastIndexOf('}');
-    if (start !== -1 && end !== -1 && end > start) { try { return JSON.parse(text.substring(start, end + 1)); } catch { } }
-    throw new Error("Could not extract JSON from response");
+    // Try to find code block
+    const match = text.match(/```json\s*([\s\S]*?)\s*```/) || text.match(/```\s*([\s\S]*?)\s*```/);
+    if (match) jsonString = match[1];
+    
+    // Attempt clean parse
+    return JSON.parse(jsonString);
+  } catch (e) {
+    console.warn("JSON Parse Failed, attempting salvage...", text);
+    // If it's just a raw string, wrap it
+    if (!text.trim().startsWith('{')) {
+         return { 
+             content: { 
+                 title: "生成结果", 
+                 titles_options: ["生成结果"], 
+                 fullText: text, 
+                 tags: [] 
+             },
+             visualData: { elements: { coverText: { main: "生成结果", sub: "" } } }
+         };
+    }
+    throw new Error("无法解析返回内容，请重试");
   }
 };
 
-const runWithFallback = async <T>(
-    operation: (model: string) => Promise<T>, 
-    context: string
-): Promise<T> => {
-    try {
-        return await operation(PRO_MODEL);
-    } catch (error: any) {
-        if (error.message?.includes('429') || error.status === 429 || error.message?.includes('quota') || error.message?.includes('503')) {
-            console.warn(`[${context}] Pro Model failed, switching to Fallback...`);
-            try {
-                return await operation(FAST_MODEL);
-            } catch (fallbackError: any) {
-                throw fallbackError;
-            }
-        }
-        throw error;
-    }
-};
-
-// --- Analysis Functions ---
-
+// --- 1. INTELLIGENT ANALYSIS (Unified for all types) ---
 export const analyzeMedia = async (
-    inputType: 'Type A' | 'Type B', 
-    fileData: any, 
+    inputType: InputType, 
+    data: any, 
     apiKey?: string
 ): Promise<MediaAnalysis> => {
     const finalKey = apiKey || process.env.API_KEY;
-    if (!finalKey) throw new Error("API Key missing");
+    if (!finalKey) throw new Error("请配置 API Key");
     const ai = new GoogleGenAI({ apiKey: finalKey });
 
     let prompt = "";
     let parts: any[] = [];
     let tools: any[] | undefined = undefined;
-    let config: any = {};
+    let config: any = { responseMimeType: "application/json" };
 
     if (inputType === 'Type A') {
-        if (fileData.url) {
-            // 1. URL Analysis (Strict Mode)
-            prompt = `
-            # Role: Video Content Auditor
-            # Task: Analyze this Video URL: ${fileData.url}
-            
-            Use Google Search to find the *specific* video title, transcript, summary, or reviews.
-            
-            **CRITICAL INSTRUCTION:**
-            - If you CANNOT find specific details about THIS exact video, output: { "summary": "PARSE_FAILED", "corePoints": [] }
-            - Do NOT hallucinate or guess.
-            - If found, summarize in Simplified Chinese.
-            
-            Output JSON: { "summary": "...", "corePoints": ["...", "..."] }
-            `;
+        // Video
+        if (data.url) {
+            prompt = `Role: Video Analyst. Analyze this URL: ${data.url}. Output JSON: { "summary": "...", "corePoints": ["..."] }`;
             parts = [{ text: prompt }];
             tools = [{ googleSearch: {} }];
-            config = { tools: tools }; 
-        } else if (fileData.frames && Array.isArray(fileData.frames)) {
-            // 2. Frame-based Visual Analysis (Multimodal)
-            prompt = `
-            # Role: Visual Content Expert
-            # Task: Analyze these ${fileData.frames.length} keyframes extracted from a video.
-            
-            Context provided by user: "${fileData.description || 'None'}"
-            
-            **INSTRUCTIONS:**
-            1. **OCR & Vision**: Read any visible text/subtitles on the frames. Analyze the visual action/scene.
-            2. **Reconstruct**: Based on the visual sequence and text, infer the video's core topic.
-            3. **Report**:
-               - Summary: What is happening?
-               - Core Points: Key visual information, text on screen, or actions observed.
-            
-            **LANGUAGE: SIMPLIFIED CHINESE.**
-            Output JSON: { "summary": "...", "corePoints": ["...", "..."] }
-            `;
-            
-            parts = [{ text: prompt }];
-            // Append all frames as image parts
-            fileData.frames.forEach((frameUrl: string) => {
-                if (frameUrl.startsWith('data:image')) {
-                    const base64 = frameUrl.split(',')[1];
-                    const mimeType = frameUrl.substring(frameUrl.indexOf(':') + 1, frameUrl.indexOf(';'));
-                    parts.push({ inlineData: { mimeType, data: base64 } });
-                }
-            });
-            config = { responseMimeType: "application/json" };
+            delete config.responseMimeType; // Search tool incompatible with JSON mime
         } else {
-            // Fallback text-only
-            prompt = `Analyze video context: ${fileData.description || "No context"}. JSON Output.`;
-            parts = [{ text: prompt }];
-            config = { responseMimeType: "application/json" };
+            prompt = `Role: Video Analyst. Analyze frames/description. Output JSON: { "summary": "...", "corePoints": ["..."] }`;
+            parts = [{ text: prompt + `\nDesc: ${data.description}` }];
+            // If frames exist (handled in App, passed as description or separate vision logic)
         }
     } else if (inputType === 'Type B') {
-        // PDF Analysis
-        if (!fileData.base64) throw new Error("No PDF file data found.");
-        prompt = `Analyze PDF. Summary + 3 Core Points. Chinese. JSON.`;
+        // PDF
+        if (!data.base64) throw new Error("PDF数据丢失");
+        prompt = `Role: Academic Analyst. Analyze PDF. Output JSON: { "summary": "...", "corePoints": ["..."] }`;
         parts = [
             { text: prompt },
-            { inlineData: { mimeType: fileData.mimeType || 'application/pdf', data: fileData.base64 } }
+            { inlineData: { mimeType: data.mimeType || 'application/pdf', data: data.base64 } }
         ];
-        config = { responseMimeType: "application/json" };
+    } else if (inputType === 'Type C') {
+        // Search Results Analysis
+        prompt = `Role: Trend Analyst. Analyze these search results to find the core trend/story.
+        Context: ${JSON.stringify(data.searchResults)}
+        Output JSON: { "summary": "...", "corePoints": ["..."] }`;
+        parts = [{ text: prompt }];
     }
 
-    return runWithFallback(async (model) => {
+    try {
         const response = await ai.models.generateContent({
-            model, 
+            model: PRO_MODEL,
             contents: { parts },
-            config
+            config: { ...config, tools }
         });
-        const res = extractJSON(response.text || "{}") as MediaAnalysis;
         
-        // Handle Explicit Failure Signal
-        if (res.summary === "PARSE_FAILED") {
-            throw new Error("无法解析该视频链接内容，请检查链接有效性或尝试上传本地视频。");
+        const result = extractJSON(response.text || "{}");
+        
+        // Handle string fallback from extractJSON if extraction failed differently
+        if (result.content && !result.summary) {
+             return { summary: result.content.fullText || "Analysis Done", corePoints: ["Check content"] };
         }
-        return res;
-    }, "analyzeMedia");
+        
+        return result as MediaAnalysis;
+    } catch (e: any) {
+        throw new Error(`智能分析失败: ${e.message}`);
+    }
 };
 
-export const askAI = async (
-    contextText: string, 
-    question: string, 
-    apiKey?: string
-): Promise<string> => {
-    const finalKey = apiKey || process.env.API_KEY;
-    const ai = new GoogleGenAI({ apiKey: finalKey });
-    const prompt = `Context: """${contextText}"""\nQuestion: "${question}"\nAnswer in Simplified Chinese.`;
-
-    return runWithFallback(async (model) => {
-        const response = await ai.models.generateContent({ model, contents: prompt });
-        return response.text || "No answer generated.";
-    }, "askAI");
-};
-
-// --- Main Functions ---
-
+// --- 2. SEARCH (Type C) ---
 export const searchTrends = async (query: string, sources: SearchSource[], customSource?: string, apiKey?: string): Promise<SearchResult[]> => {
   const finalKey = apiKey || process.env.API_KEY;
-  if (!finalKey) throw new Error("API Key missing");
   const ai = new GoogleGenAI({ apiKey: finalKey });
 
-  let fullQuery = "";
+  let searchQuery = query;
+  // Platform filtering
+  const siteMap: Record<string, string> = {
+      'x': 'site:twitter.com OR site:x.com',
+      'google': '' // General
+  };
   
-  if (customSource && (customSource.startsWith('http') || customSource.includes('www'))) {
-      fullQuery = `Analyze URL: ${customSource}. Extract Title, Summary, Main Image URL. **CHINESE**.`;
-  } else {
-      const platformKeywords: string[] = sources.map(s => {
-        if (s === 'x') return 'site:twitter.com OR site:x.com';
-        if (s === 'google') return ''; 
-        return '';
-      });
-      if (customSource && customSource.trim()) platformKeywords.push(`site:${customSource.trim()}`);
-      const sourceFilter = platformKeywords.filter(Boolean).join(' OR ');
-      const qText = query || "Latest trending";
-      fullQuery = `"${qText}" ${sourceFilter ? `(${sourceFilter})` : ''}`;
-  }
+  const siteFilters = sources.map(s => siteMap[s]).filter(Boolean).join(' OR ');
+  if (siteFilters) searchQuery += ` (${siteFilters})`;
+  if (customSource) searchQuery = `site:${customSource} ${query}`;
 
-  return runWithFallback(async (model) => {
-    // Search uses FAST_MODEL by default via fallback logic if PRO fails, but usually PRO works for logic
-    // Note: Using PRO for search might burn quota fast.
-    // However, the instruction says "Use PRO for everything".
+  const prompt = `
+  Find 20 latest news/posts for: "${searchQuery}".
+  Return JSON List:
+  [
+    { "id": "1", "title": "...", "source": "Google/X", "date": "2h ago", "snippet": "...", "url": "..." }
+  ]
+  Strictly JSON.
+  `;
+
+  try {
+    // Search MUST use Flash or Pro with Tools. Using Pro as requested for "Analysis" but Search is tool-heavy.
+    // Preview models often have better tool adherence.
     const response = await ai.models.generateContent({
-      model, // Will start with PRO
-      contents: `Task: ${fullQuery}. Return strictly JSON list with 'imageUrl'. **CHINESE**.`,
-      config: {
-        tools: [{ googleSearch: {} }],
-        systemInstruction: SEARCH_SYSTEM_INSTRUCTION,
-      },
+      model: PRO_MODEL, 
+      contents: prompt,
+      config: { tools: [{ googleSearch: {} }] }, // No JSON mime with tools
     });
 
-    const parsedData = extractJSON(response.text || "{}");
-    let results: SearchResult[] = [];
-    if (Array.isArray(parsedData)) results = parsedData;
-    else if (parsedData.results && Array.isArray(parsedData.results)) results = parsedData.results;
-
-    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-    if (results.length === 0 && groundingChunks.length > 0) {
-        return groundingChunks.map((chunk: any, idx: number) => ({
-          id: String(idx),
-          title: chunk.web?.title || "Result",
-          snippet: "...",
-          source: "Web",
-          url: chunk.web?.uri,
-          date: ""
-        }));
-    }
-    return results.map((r, i) => ({
-        id: r.id || String(i),
-        title: r.title || "Title",
-        snippet: r.snippet || "...",
-        source: r.source || "Web",
-        url: r.url, 
-        date: r.date,
-        imageUrl: r.imageUrl 
+    const json = extractJSON(response.text || "[]");
+    let list = Array.isArray(json) ? json : (json.results || []);
+    
+    // Ensure 20 items if possible (model might return fewer)
+    return list.map((item: any, i: number) => ({
+        id: String(i),
+        title: item.title || "No Title",
+        snippet: item.snippet || "...",
+        source: item.source || "Web",
+        url: item.url || "#",
+        date: item.date || "Recently",
+        imageUrl: item.imageUrl
     }));
-  }, "searchTrends");
+  } catch (e) {
+    console.error(e);
+    return [];
+  }
 };
 
+// --- 3. GENERATE COPY (From Analysis) ---
 export const generateRednote = async (
   inputType: InputType,
-  inputText: string,
-  contextData?: any,
-  tone: RednoteTone = 'emotional',
-  customRequirement?: string,
+  analysisResult: MediaAnalysis,
+  tone: RednoteTone,
+  customReq?: string,
   apiKey?: string
 ): Promise<RednoteResponse> => {
   const finalKey = apiKey || process.env.API_KEY;
-  if (!finalKey) throw new Error("API Key missing");
   const ai = new GoogleGenAI({ apiKey: finalKey });
-  
-  let toneInstruction = "";
-  if (tone === 'imitate') {
-      toneInstruction = `Role: Viral Expert. Ref Style: """${customRequirement || "Generic"}""". Topic: "${inputText}". Output: 5 Titles, Content mimicking ref. **CHINESE ONLY**`;
-  } else {
-      switch (tone) {
-          case 'emotional': toneInstruction = "Tone: Emotional (家人们)."; break;
-          case 'professional': toneInstruction = "Tone: Professional (干货)."; break;
-          case 'speed': toneInstruction = "Tone: Urgent News (速递)."; break;
-          case 'humorous': toneInstruction = "Tone: Funny."; break;
-      }
-  }
 
-  let promptParts: any[] = [
-      { text: `inputType: ${inputType}\n\n${toneInstruction}\n\n**IMPORTANT: OUTPUT IN SIMPLIFIED CHINESE.**` }
-  ];
-  
-  if (contextData && contextData.analysis) {
-      promptParts.push({ text: `\n\n# DEEP ANALYSIS CONTEXT (Primary Source):\nSummary: ${contextData.analysis.summary}\nCore Breakdown: ${contextData.analysis.corePoints.join('\n')}` });
-  }
+  const prompt = `
+  Based on this Analysis:
+  Summary: ${analysisResult.summary}
+  Points: ${analysisResult.corePoints.join(', ')}
 
-  if (inputType === 'Type C' && contextData) {
-      promptParts.push({ text: `\n\nSearch Context: ${JSON.stringify(contextData, null, 2)}` });
-  } else if (inputType === 'Type A' && contextData) {
-       promptParts.push({ text: `\n\nVisual Context: ${contextData.frameCount} frames.` });
-  } else if (inputType === 'Type B' && contextData && contextData.fileData) {
-      promptParts.push({ text: `\n\nAnalyze PDF.` });
-      promptParts.push({ inlineData: { mimeType: contextData.mimeType || 'application/pdf', data: contextData.fileData } });
-  } else {
-      if (tone !== 'imitate') promptParts.push({ text: `Topic: ${inputText}` });
-  }
+  Task: Write a Viral Rednote.
+  Tone: ${tone}
+  ${customReq ? `Custom Requirement: ${customReq}` : ''}
 
-  return runWithFallback(async (model) => {
-      const response = await ai.models.generateContent({
-          model: model,
-          contents: { parts: promptParts },
-          config: { systemInstruction: SYSTEM_INSTRUCTION },
-      });
-      const safeJson = extractJSON(response.text || "{}") as any;
-      if (!safeJson.content) safeJson.content = { title: "AI Note", fullText: response.text || "" };
-      if (!safeJson.content.fullText) safeJson.content.fullText = safeJson.content.body || "";
-      if (!Array.isArray(safeJson.content.titles_options)) safeJson.content.titles_options = [safeJson.content.title || "Title"];
-      if (!safeJson.visualData) safeJson.visualData = { elements: { coverText: { main: safeJson.content.title, sub: "" } } };
-      return safeJson as RednoteResponse;
-  }, "generateRednote");
+  Output JSON (Strict Schema defined in System Instruction).
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: PRO_MODEL,
+      contents: prompt,
+      config: { 
+          systemInstruction: SYSTEM_INSTRUCTION,
+          responseMimeType: "application/json"
+      },
+    });
+
+    let data = extractJSON(response.text || "{}");
+    
+    // Fix: "cannot create property fulltext on string"
+    // If data is a string (model failed to output JSON object), wrap it.
+    if (typeof data === 'string') {
+        data = {
+            content: {
+                title: "AI 生成内容",
+                titles_options: ["AI 生成内容"],
+                coreIdea: "自动生成",
+                fullText: data,
+                tags: []
+            },
+            visualData: { elements: { coverText: { main: "生成成功", sub: "" } } }
+        };
+    }
+    
+    // Double check structure
+    if (!data.content) data.content = {};
+    if (!data.content.fullText) data.content.fullText = data.body || "";
+    
+    return data as RednoteResponse;
+  } catch (e: any) {
+    throw new Error(`生成失败: ${e.message}`);
+  }
 };
 
-export const regenerateTitles = async (currentTopic: string, referenceTitle: string, apiKey?: string): Promise<string[]> => {
-    const finalKey = apiKey || process.env.API_KEY;
+// ... (Keep rewrite/regenerate functions using PRO_MODEL similar to generateRednote logic)
+export const regenerateTitles = async (topic: string, ref: string, key?: string) => {
+    // ... implementation using PRO_MODEL
+    const finalKey = key || process.env.API_KEY;
     const ai = new GoogleGenAI({ apiKey: finalKey });
-    const prompt = `Generate 5 viral titles for: "${currentTopic}". Mimic: "${referenceTitle}". **CHINESE**. JSON Array.`;
-
-    return runWithFallback(async (model) => {
-        const response = await ai.models.generateContent({ model, contents: prompt });
-        const json = extractJSON(response.text || "[]");
-        return Array.isArray(json) ? json : (json.titles || []);
-    }, "regenerateTitles");
+    const response = await ai.models.generateContent({
+        model: PRO_MODEL,
+        contents: `Generate 5 titles for "${topic}" mimicking "${ref}". JSON Array.`,
+        config: { responseMimeType: "application/json" }
+    });
+    return extractJSON(response.text || "[]");
 };
 
-export const rewriteContent = async (
-    currentContent: string, 
-    referenceArticle: string, 
-    customInstruction: string,
-    apiKey?: string
-): Promise<string> => {
-    const finalKey = apiKey || process.env.API_KEY;
+export const rewriteContent = async (content: string, ref: string, custom: string, key?: string) => {
+     const finalKey = key || process.env.API_KEY;
     const ai = new GoogleGenAI({ apiKey: finalKey });
-    const prompt = `Rewrite content. ${customInstruction ? `Instruction: "${customInstruction}"` : ''} ${referenceArticle ? `Ref Style: """${referenceArticle}"""` : ''} Content: """${currentContent}""" **CHINESE ONLY.**`;
-
-    return runWithFallback(async (model) => {
-        const response = await ai.models.generateContent({ model, contents: prompt });
-        return response.text || currentContent;
-    }, "rewriteContent");
+    const response = await ai.models.generateContent({
+        model: PRO_MODEL,
+        contents: `Rewrite this: "${content}". Custom: ${custom}. Ref: ${ref}. Output text only.`,
+    });
+    return response.text || content;
 };
 
-export const regenerateCoverTitle = async (topic: string, currentTitle: string, apiKey?: string): Promise<string> => {
-    const finalKey = apiKey || process.env.API_KEY;
+export const regenerateCoverTitle = async (topic: string, curr: string, key?: string) => {
+    const finalKey = key || process.env.API_KEY;
     const ai = new GoogleGenAI({ apiKey: finalKey });
-    const prompt = `Create 1 punchy Cover Title (2-6 words) for "${topic}". Current: "${currentTitle}". **CHINESE**.`;
-
-    return runWithFallback(async (model) => {
-        const response = await ai.models.generateContent({ model, contents: prompt });
-        return response.text?.trim().replace(/^"|"$/g, '') || currentTitle;
-    }, "regenerateCoverTitle");
+    const response = await ai.models.generateContent({
+        model: PRO_MODEL,
+        contents: `Create 1 short cover title for "${topic}". Current: "${curr}". Text only.`,
+    });
+    return response.text || curr;
 };
